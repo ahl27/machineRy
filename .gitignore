@@ -4,3 +4,5 @@
 .R*
 *.Rproj
 *.tar.gz
+src/*.o
+src/*.so
