@@ -6,3 +6,4 @@
 *.tar.gz
 src/*.o
 src/*.so
+*.o

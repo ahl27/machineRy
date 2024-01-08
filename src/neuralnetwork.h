@@ -159,6 +159,8 @@ NN* allocNetwork(int num_layers, int* layer_sizes, char* a_functions, int input_
 void deallocLayer(NNLayer* layer);
 
 void deallocNetwork(NN* network);
+
+void FreeNetwork(SEXP nnPtr);
 /******************************/
 
 /********** Training **********/

@@ -26,6 +26,7 @@ SEXP R_PredictForInput(SEXP INPUTVECTOR, SEXP nnPtr);
 SEXP R_TrainForInput(SEXP INPUTVECTOR, SEXP OUTPUTVECTOR, SEXP nnPtr);
 SEXP R_UpdateWeights(SEXP LOSSVEC, SEXP nnPtr);
 
-static void FreeNetwork(SEXP nnPtr);
+/**** Random Forest ****/
+SEXP test_bfs_q2tree(SEXP INDICES, SEXP THRESHOLDS, SEXP LENGTH);
 
 #endif

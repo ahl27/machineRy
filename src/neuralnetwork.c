@@ -101,7 +101,7 @@ SEXP R_UpdateWeights(SEXP LOSSVEC, SEXP nnPtr){
   return R_NilValue;
 }
 
-static void FreeNetwork(SEXP nnPtr){
+void FreeNetwork(SEXP nnPtr){
   if (!R_ExternalPtrAddr(nnPtr)) return;
   NN *network = (NN *) R_ExternalPtrAddr(nnPtr);
   deallocNetwork(network);
@@ -438,7 +438,6 @@ void testnetwork(){
   int epoch = 10;
   int testing_iter = 100;
   int maxVal = 100;
-  double totalloss;
 
   double ipt[input_size];
   double expOut[out_size];

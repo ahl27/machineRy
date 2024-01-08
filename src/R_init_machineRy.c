@@ -1,5 +1,6 @@
 #include "machineRy.h"
 #include "neuralnetwork.h"
+#include "randomforest.h"
 
 
 #define CALLDEF(name, n)  {#name, (DL_FUNC) &name, n}
@@ -13,6 +14,7 @@ static const R_CallMethodDef callMethods[] = { // method name, num args
   CALLDEF(R_PredictForInput, 2),
   CALLDEF(R_TrainForInput, 3),
   CALLDEF(R_UpdateWeights, 2),
+  CALLDEF(test_bfs_q2tree, 3),
   {NULL, NULL, 0}
 };
 
