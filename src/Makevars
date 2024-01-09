@@ -1,1 +1,2 @@
-FFLAGS += -std=f2018
+FFLAGS += -std=f2018 -fopenmp -parallel
+LDFLAGS += -no-compact-unwind

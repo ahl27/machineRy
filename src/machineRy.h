@@ -28,5 +28,6 @@ SEXP R_UpdateWeights(SEXP LOSSVEC, SEXP nnPtr);
 
 /**** Random Forest ****/
 SEXP test_bfs_q2tree(SEXP INDICES, SEXP THRESHOLDS, SEXP LENGTH);
+SEXP test_tabulate(SEXP V, SEXP L);
 
 #endif

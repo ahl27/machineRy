@@ -1,6 +1,8 @@
 #ifndef RANDOMFOREST_INC
 #define RANDOMFOREST_INC
 
+#include <Rinternals.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -12,6 +14,7 @@ struct DTreeNode {
   struct DTreeNode *left;
   struct DTreeNode *right;
   double threshold;
+  double gini_gain;
   int index;
 };
 typedef struct DTreeNode DTN;

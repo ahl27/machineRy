@@ -1,4 +1,5 @@
 #include "machineRy.h"
+#include "fortran_includes.h"
 #include "randomforest.h"
 
 static DTN *rf_head;
@@ -7,6 +8,7 @@ DTN *initNode(){
   DTN *node = malloc(sizeof(DTN));
   node->threshold = 0;
   node->index = -1;
+  node->gini_gain = 0;
   node->left = NULL;
   node->right = NULL;
   return(node);
@@ -55,6 +57,61 @@ void bfs_q2tree(int *indices, double *thresholds, int length){
   return;
 }
 
+void split_decision_node_classif(DTN *node, double *data, int *class_response,
+                                  int nrows, int ncols, int nclass, int num_to_check){
+  // data should always be a numeric
+  // response should be an int ranging from 1:n
+  // nclass, num_to_check are constant throughout execution of the program
+
+  // data will be a matrix stored by column (first nrows entries are col1, second are col2, etc.)
+  // we'll just assume that all the preprocessing is done in R, no need to fiddle with that here
+  // processing the SEXPs will be done separately so we can repeatedly call this internally
+
+  // setting up a random sample of ints
+  int *cols = malloc(sizeof(int) * ncols);
+  for(int i=0; i<ncols; i++) cols[i] = i;
+  int choice, tmp;
+
+  // shuffle the columns
+  GetRNGstate();
+  for(int i=ncols-1; i; i--){
+    choice = floor(unifRand()*i);
+    tmp = cols[choice];
+    cols[choice] = cols[i];
+    cols[i] = tmp;
+  }
+  PutRNGstate();
+
+  double *results = malloc(sizeof(double) * num_to_check);
+  double *gini_gain = malloc(sizeof(double) * num_to_check);
+  double curmax = -1.0;
+  choice = -1;
+  for(int i=0; i<num_to_check; i++){
+    F77_CALL(find_gini_split)(&data[nrows*cols[i]], class_response, &nrows, &nclass, &results[i], &gini_gain[i]);
+    if(gini_gain[i] > curmax){
+      choice = i;
+      curmax = gini_gain[i];
+    }
+  }
+
+  double splitpoint = results[choice];
+
+  free(results);
+  free(gini_gain);
+  free(cols);
+
+  node->threshold = splitpoint;
+  node->index = choice;
+  node->gini_gain = curmax;
+
+  return;
+}
+
+void split_decision_node_regress(double *data, double *dbl_response, double *num_response, int nrows, int ncols){
+  return;
+}
+
+
 void freeDecisionTree(DTN *tree){
   if(!tree) return;
   freeDecisionTree(tree->left);
@@ -65,6 +122,32 @@ void freeDecisionTree(DTN *tree){
 /*
  * testing functions
  */
+
+SEXP test_tabulate(SEXP V, SEXP L){
+  int l = INTEGER(L)[0];
+  double *outval = malloc(sizeof(double) * l);
+  int *outcount = malloc(sizeof(int) * l);
+  //int *ctr = malloc(sizeof(int));
+  int ctr;
+  F77_CALL(tabulate_double)(REAL(V), INTEGER(L), outval, outcount, &ctr);
+
+  SEXP outv = PROTECT(allocVector(VECSXP, 2));
+  SEXP VALS = PROTECT(allocVector(REALSXP, ctr));
+  SEXP COUNTS = PROTECT(allocVector(INTSXP, ctr));
+
+  memcpy(REAL(VALS), outval, sizeof(double) * ctr);
+  memcpy(INTEGER(COUNTS), outcount, sizeof(int) * ctr);
+
+  SET_VECTOR_ELT(outv, 0, VALS);
+  SET_VECTOR_ELT(outv, 1, COUNTS);
+
+  free(outval);
+  free(outcount);
+
+  UNPROTECT(3);
+  return(outv);
+}
+
 SEXP test_bfs_q2tree(SEXP INDICES, SEXP THRESHOLDS, SEXP LENGTH){
   int length = INTEGER(LENGTH)[0];
   int *indices = INTEGER(INDICES);
