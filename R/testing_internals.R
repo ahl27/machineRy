@@ -49,3 +49,34 @@ test_unbalanced_tree <- function(tree_depth, subtree_depth){
   print(thresholds)
   .Call("test_bfs_q2tree", indices, thresholds, length(indices))
 }
+
+test_grow_tree <- function(nvars, nclasses, nsamp, max_depth, to_samp=as.integer(floor(sqrt(nvars)))){
+  # R CMD INSTALL . && Rscript -e "library('machineRy'); test_grow_tree(5L, 3L, 100L, max_depth=5L)"
+  set.seed(123L)
+  cat("Generating test dataset...\n")
+  d <- matrix(NA_real_, nrow=nsamp, ncol=nvars)
+  cls <- integer(nsamp)
+  nclasses <- as.integer(nclasses)
+
+  for(i in seq_len(nvars)){
+    m = runif(1, min=0, max=5)
+    s = runif(1, min=0, max=2)
+    d[,i] <- abs(rnorm(nsamp, mean=m, sd=s))
+  }
+
+  eqs <- lapply(seq_len(nclasses), \(i){
+    runif(nvars, min=0, max=5)
+  })
+
+  for(i in seq_len(nrow(d))){
+    p <- vapply(eqs, \(x) sum(abs(x * d[i,])), numeric(1L))
+    cls[i] <- sample(seq_len(nclasses), 1,  prob = p)
+  }
+
+  print(cls)
+  print(head(d))
+  cat("Growing tree...\n")
+  .Call("R_learn_tree_classif",
+        d, nrow(d), ncol(d),
+        cls, nclasses, to_samp, max_depth)
+}

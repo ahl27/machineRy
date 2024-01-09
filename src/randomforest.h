@@ -27,8 +27,16 @@ typedef struct DTNqueue queue;
 
 DTN *initNode();
 
+// internal functions
 void freeDecisionTree(DTN *tree);
 void bfs_q2tree(int *indices, double *thresholds, int length);
+
+
+void learntreeclassif_helper(DTN *node, double *data, int *class_response,
+                              int nrows, int ncols, int nclass, int num_to_check,
+                              int cur_depth, int max_depth);
+void split_decision_node_classif(DTN *node, double *data, int *class_response,
+                                  int nrows, int ncols, int nclass, int num_to_check);
 
 /* testing stuff */
 struct printQ {

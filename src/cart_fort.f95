@@ -57,7 +57,7 @@ contains
     integer(c_int), intent(in) :: classes(l)
     real(c_double), intent(out) :: o_v
 
-    real(c_double) :: class_counts(l), total
+    real(c_double) :: class_counts(nclass), total
     integer(c_int) :: i
     if(l == 0) then
       o_v = 1.0
@@ -65,14 +65,14 @@ contains
     end if
 
     do i=1, nclass
-      class_counts(i) = count(classes==i, kind=c_double) ! cast to double for later
+      class_counts(i) = 0.0+count(classes==i) ! cast to double for later
     end do
 
     total = sum(class_counts)
     o_v = 1.0-sum((class_counts / total)**2)
   end subroutine gini_imp
 
-  pure subroutine find_gini_split(v, response, l, nclass, o_v, o_gini_score) bind(C, name="find_gini_split_")
+  subroutine find_gini_split(v, response, l, nclass, o_v, o_gini_score) bind(C, name="find_gini_split_")
     ! Here I'm going to assume that scores are INTEGERS on scale 1:n
     use, intrinsic :: iso_c_binding, only: c_int, c_double
     implicit none
@@ -87,21 +87,27 @@ contains
     logical :: tmpmask(l)
 
     ! calculate the base gini impurity
-    ! call gini_imp(response, l, nclass, total_gini)
+    call gini_imp(response, l, nclass, total_gini)
+    gains(:) = total_gini
 
     ! Calculate the gini gain for every possible split point
     do concurrent(i=1:l)
+    !do i=1, l
       tmpmask(:) = v <= v(i)
-      call gini_imp(pack(response, tmpmask), count(tmpmask), nclass, total_gini)
-      gains(i) = total_gini * count(tmpmask)
-      tmpmask(:) = .not. tmpmask
-      call gini_imp(pack(response, tmpmask), count(tmpmask), nclass, total_gini)
-      gains(i) = gains(i) + total_gini * count(tmpmask)
+      if(count(tmpmask) == l) then
+        gains(i) = -1.0
+      else
+        call gini_imp(pack(response, tmpmask), count(tmpmask), nclass, total_gini)
+        gains(i) = gains(i) - (total_gini * count(tmpmask)) / l
+        tmpmask(:) = .not. tmpmask
+        call gini_imp(pack(response, tmpmask), count(tmpmask), nclass, total_gini)
+        gains(i) = gains(i) - (total_gini * count(tmpmask)) / l
+      end if
     end do
 
     gains = gains / l
     mloc = maxloc(gains, dim=1)
-    o_v = gains(mloc)
+    o_v = v(mloc)
     o_gini_score = gains(mloc)
   end subroutine find_gini_split
 
