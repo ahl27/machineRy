@@ -1,4 +1,4 @@
-# MachineRy: Machine Learning Models for R
+# machineRy: Machine Learning Models for R
 
 This is somewhat of a sandbox for me to write machine learning models that will be
 incorporated into other packages (e.g., SynExtend).
