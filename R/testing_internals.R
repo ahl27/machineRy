@@ -3,12 +3,13 @@ test_balanced_tree <- function(tree_depth){
   tree_depth <- as.integer(tree_depth)
   indices <- sample(1L:9L, 2**tree_depth-1, replace=TRUE)
   thresholds <- trunc(runif(2**tree_depth-1, min=0, max=10)*10) / 10
+  gini_gain <- runif(2**tree_depth-1)
 
   indices[(2**(tree_depth-1)):(length(indices))] <- -1L
 
   print(indices)
   print(thresholds)
-  .Call("test_bfs_q2tree", indices, thresholds, length(indices))
+  .Call("test_bfs_q2tree", indices, thresholds, gini_gain, length(indices))
 }
 
 test_unbalanced_tree <- function(tree_depth, subtree_depth){
@@ -16,6 +17,7 @@ test_unbalanced_tree <- function(tree_depth, subtree_depth){
   subtree_depth <- vapply(as.integer(subtree_depth), \(x) min(x, tree_depth-2L), integer(1L))
   indices <- sample(1L:9L, 2**tree_depth-1, replace=TRUE)
   thresholds <- trunc(runif(2**tree_depth-1, min=1, max=10)*10) / 10
+  gini_gain <- runif(2**tree_depth-1)
 
   indices[(2**(tree_depth-1)):(length(indices))] <- -1L
   print(indices)
@@ -45,13 +47,15 @@ test_unbalanced_tree <- function(tree_depth, subtree_depth){
   indices[to_flip] <- -1L
   indices <- indices[-to_remove]
   thresholds <- thresholds[-to_remove]
+  gini_gain <- gini_gain[-to_remove]
   print(indices)
   print(thresholds)
-  .Call("test_bfs_q2tree", indices, thresholds, length(indices))
+  .Call("test_bfs_q2tree", indices, thresholds, gini_gain, length(indices))
 }
 
-test_grow_tree <- function(nvars, nclasses, nsamp, max_depth, to_samp=as.integer(floor(sqrt(nvars)))){
-  # R CMD INSTALL . && Rscript -e "library('machineRy'); test_grow_tree(5L, 3L, 100L, max_depth=5L)"
+test_grow_tree <- function(nvars, nclasses, nsamp,
+                           max_depth, to_samp=as.integer(floor(sqrt(nvars))),
+                           min_nodesize=1L){
   set.seed(123L)
   cat("Generating test dataset...\n")
   d <- matrix(NA_real_, nrow=nsamp, ncol=nvars)
@@ -76,7 +80,35 @@ test_grow_tree <- function(nvars, nclasses, nsamp, max_depth, to_samp=as.integer
   print(cls)
   print(head(d))
   cat("Growing tree...\n")
-  .Call("R_learn_tree_classif",
+  r <- .Call("R_learn_tree_classif",
         d, nrow(d), ncol(d),
-        cls, nclasses, to_samp, max_depth)
+        cls, nclasses, to_samp,
+        max_depth, min_nodesize)
+  names(r) <- c("indices", "thresholds", "gini_gain")
+
+  exptr <- .Call("R_get_treeptr", NULL, r[[1]], r[[2]], r[[3]], length(r[[1]]))
+
+  ## get the original values back with inverse.rle
+  res <- structure(exptr, Indices=rle(r[[1]]), Thresholds=rle(r[[2]]),
+                   Gini=rle(r[[3]]), Size=length(r[[1]]),
+                   nvars=nvars, nclasses=nclasses)
+  return(res)
+}
+
+test_run_rf <- function(nentries){
+  df <- data.frame(v1=runif(nentries), v2=runif(nentries),
+                   v3=rnorm(nentries), v4=sample(c(T,F), nentries, r=T),
+                   y=as.factor(sample(1:3, nentries, r=TRUE)))
+
+  rf <- RandForest(y~., data=df, nodesize=5)
+  subsamp <- sample(seq_len(nentries), 100L)
+  res <- predict(rf, df[subsamp,])
+  res <- cbind(res, as.integer(df$y[subsamp]))
+
+  pred_corr <- vapply(seq_len(nrow(res)), \(i){
+    vals <- which(res[i,1:3] == max(res[i,1:3]))
+    res[i,4]%in%vals
+  }, logical(1L))
+  cat("Got ", sum(pred_corr), "% correct\n", sep='')
+  return(list(model=rf, results=res))
 }

@@ -1,2 +1,8 @@
 useDynLib(machineRy)
 exportPattern("^[^\\.]")
+
+S3method(show, "DecisionTree")
+S3method(show, "RandForest")
+S3method(print, "RandForest")
+S3method(print, "DecisionTree")
+S3method(predict, "RandForest")

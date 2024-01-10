@@ -28,15 +28,18 @@ typedef struct DTNqueue queue;
 DTN *initNode();
 
 // internal functions
+DTN *bfs_q2tree(int *indices, double *thresholds, double *gini, int length);
+
+void R_TreeFinalizer(SEXP TreePointer);
 void freeDecisionTree(DTN *tree);
-void bfs_q2tree(int *indices, double *thresholds, int length);
-
-
 void learntreeclassif_helper(DTN *node, double *data, int *class_response,
                               int nrows, int ncols, int nclass, int num_to_check,
-                              int cur_depth, int max_depth);
+                              int cur_depth, int max_depth, int min_nodesize);
 void split_decision_node_classif(DTN *node, double *data, int *class_response,
                                   int nrows, int ncols, int nclass, int num_to_check);
+void export_internal_tree(DTN *tree, int **indices, double **thresholds, double **gini_gain, int *outlength);
+
+double predict_for_input(DTN *tree, double *data);
 
 /* testing stuff */
 struct printQ {
