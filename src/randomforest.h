@@ -11,6 +11,7 @@
 // they should not be expected to persist
 
 struct DTreeNode {
+  // TODO: maybe save the node size so that we can prune better later
   struct DTreeNode *left;
   struct DTreeNode *right;
   double threshold;

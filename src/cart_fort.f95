@@ -72,7 +72,7 @@ contains
     o_v = 1.0-sum((class_counts / total)**2)
   end subroutine gini_imp
 
-  subroutine find_gini_split(v, response, l, nclass, o_v, o_gini_score) bind(C, name="find_gini_split_")
+  pure subroutine find_gini_split(v, response, l, nclass, o_v, o_gini_score) bind(C, name="find_gini_split_")
     ! Here I'm going to assume that scores are INTEGERS on scale 1:n
     use, intrinsic :: iso_c_binding, only: c_int, c_double
     implicit none

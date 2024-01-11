@@ -162,7 +162,8 @@ predict.RandForest <- function(rf, newdata=NULL, na.action=na.pass){
     treeobj <- rf[[i]]
     for(i in seq(2,4))
       treeobj[[i]] <- inverse.rle(treeobj[[i]])
-    p <- as.integer(.Call("R_rfpredict", treeobj, t(x), nc, nentries))
+    p <- .Call("R_rfpredict", treeobj, t(x), nc, nentries)
+    p <- as.integer(p)
     idxs <- cbind(seq_len(nentries), p)
     results[idxs] <- results[idxs] + 1.0
   }

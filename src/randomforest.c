@@ -98,23 +98,31 @@ SEXP R_learn_tree_classif(SEXP DATA, SEXP NROWS, SEXP NCOLS, SEXP CLASSES, SEXP 
   return(R_retval);
 }
 
-SEXP R_get_treeptr(SEXP VolatilePtr, SEXP INDICES, SEXP THRESHOLDS, SEXP GINIS, SEXP LEN){
+SEXP R_get_treeptr(SEXP VolatilePtr, SEXP INDICES, SEXP THRESHOLDS, SEXP GINIS){
   // We're going to lazily evaluate these trees
   // if they exist, just return the external pointer
   // note that it seems NULL can be treated as an external pointer address for whatever reason
   if(VolatilePtr != R_NilValue && R_ExternalPtrAddr(VolatilePtr)) return(VolatilePtr);
+  int madePtr = 0;
 
   // otherwise, create the tree and return an external pointer to it
-  DTN *tree = bfs_q2tree(INTEGER(INDICES), REAL(THRESHOLDS), REAL(GINIS), INTEGER(LEN)[0]);
-  SEXP R_ptr = PROTECT(R_MakeExternalPtr(tree, R_NilValue, R_NilValue));
-  R_RegisterCFinalizerEx(R_ptr, (R_CFinalizer_t) R_TreeFinalizer, TRUE);
-  UNPROTECT(1);
-  return R_ptr;
+  DTN *tree = bfs_q2tree(INTEGER(INDICES), REAL(THRESHOLDS), REAL(GINIS), LENGTH(INDICES));
+  if(VolatilePtr == R_NilValue){
+    VolatilePtr = PROTECT(R_MakeExternalPtr(tree, R_NilValue, R_NilValue));
+    madePtr = 1;
+  } else {
+    R_SetExternalPtrAddr(VolatilePtr, tree);
+  }
+  R_RegisterCFinalizerEx(VolatilePtr, (R_CFinalizer_t) R_TreeFinalizer, TRUE);
+  if(madePtr) UNPROTECT(1);
+  return VolatilePtr;
 }
 
 SEXP R_rfpredict(SEXP RF_Obj, SEXP DATA, SEXP L, SEXP NENTRIES){
   // assume we transpose the input before it's passed in so that each column is one entry
-  SEXP R_ptr = R_get_treeptr(VECTOR_ELT(RF_Obj, 0), VECTOR_ELT(RF_Obj, 1), VECTOR_ELT(RF_Obj, 2), VECTOR_ELT(RF_Obj, 3), L);
+  // pointer needs to be reprotected because it may not be protected after R_get_treeptr
+  SEXP R_ptr = PROTECT(R_get_treeptr(VECTOR_ELT(RF_Obj, 0), VECTOR_ELT(RF_Obj, 1), VECTOR_ELT(RF_Obj, 2), VECTOR_ELT(RF_Obj, 3)));
+  SET_VECTOR_ELT(RF_Obj, 0, R_ptr);
   DTN *tree = (DTN *) R_ExternalPtrAddr(R_ptr);
 
   int nentries = INTEGER(NENTRIES)[0];
@@ -126,7 +134,7 @@ SEXP R_rfpredict(SEXP RF_Obj, SEXP DATA, SEXP L, SEXP NENTRIES){
   for(int i=0; i<nentries; i++)
     retval[i] = predict_for_input(tree, &data[i*len]);
 
-  UNPROTECT(1);
+  UNPROTECT(2);
   return(R_return);
 }
 

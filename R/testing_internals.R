@@ -110,5 +110,5 @@ test_run_rf <- function(nentries){
     res[i,4]%in%vals
   }, logical(1L))
   cat("Got ", sum(pred_corr), "% correct\n", sep='')
-  return(list(model=rf, results=res))
+  return(list(model=rf, results=res, data=df))
 }
