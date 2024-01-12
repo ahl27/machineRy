@@ -100,7 +100,7 @@ test_run_rf <- function(nentries){
                    v3=rnorm(nentries), v4=sample(c(T,F), nentries, r=T),
                    y=as.factor(sample(1:3, nentries, r=TRUE)))
 
-  rf <- RandForest(y~., data=df, nodesize=5)
+  rf <- RandForest(y~., data=df, ntree=100L, nodesize=1)
   subsamp <- sample(seq_len(nentries), 100L)
   res <- predict(rf, df[subsamp,])
   res <- cbind(res, as.integer(df$y[subsamp]))
@@ -109,6 +109,16 @@ test_run_rf <- function(nentries){
     vals <- which(res[i,1:3] == max(res[i,1:3]))
     res[i,4]%in%vals
   }, logical(1L))
-  cat("Got ", sum(pred_corr), "% correct\n", sep='')
-  return(list(model=rf, results=res, data=df))
+  cat("We got ", sum(pred_corr), "% correct\n", sep='')
+
+  require('randomForest')
+  pd <- randomForest(y~., data=df, ntree=100L, nodesize=1L)
+  pred <- predict(pd, df[subsamp,])
+  res <- cbind(pred, df$y[subsamp])
+  pred_corr <- vapply(seq_len(nrow(res)), \(i){
+    res[i,1] == res[i,2]
+  }, logical(1L))
+  cat("randomForest got ", sum(pred_corr), "% correct\n", sep='')
+  return(NULL)
+  #return(list(model=rf, results=res, data=df))
 }

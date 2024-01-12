@@ -50,7 +50,7 @@ contains
   ! end subroutine find_split
 
 
-  pure subroutine gini_imp(classes, l, nclass, o_v)
+  subroutine gini_imp(classes, l, nclass, o_v)
     use, intrinsic :: iso_c_binding, only: c_int, c_double
     implicit none
     integer(c_int), intent(in) :: l, nclass
@@ -71,6 +71,7 @@ contains
 
     ! total is always just l
     ! total = sum(class_counts)
+    class_counts(:) = 0.0
     sum_amt = 1.0/l
     do i=1, l
       j = classes(i)
@@ -87,7 +88,7 @@ contains
     logical, intent(in) :: mask(l)
     real(c_double), intent(out) :: o_v
 
-    real(c_double) :: cc_left(nclass), cc_right(nclass), sum_amt
+    real(c_double) :: cc_left(nclass), cc_right(nclass), sum_amt, divisor
     integer(c_int) :: i, j
 
     cc_left(:) = 0.0
@@ -106,7 +107,8 @@ contains
     if(mask_count .ne. l) cc_right = cc_right / (l-mask_count)
 
     ! return weighted gini impurity
-    o_v = (mask_count/l)*(1.0-sum(cc_left**2)) + ((l-mask_count)/l)*(1.0-sum(cc_right**2))
+    divisor = real(mask_count) / l
+    o_v = divisor*(1.0-sum(cc_left**2)) + (1-divisor)*(1.0-sum(cc_right**2))
   end subroutine double_gini_imp
 
   subroutine find_gini_split(v, response, l, nclass, o_v, o_gini_score) bind(C, name="find_gini_split_")
@@ -124,31 +126,73 @@ contains
     logical :: tmpmask(l)
 
     ! test variables
+    real(c_double) :: cur_gain, new_gain, cur_thresh, new_thresh, change, vmax, vmin
 
     ! calculate the base gini impurity
     call gini_imp(response, l, nclass, total_gini)
-    gains(:) = total_gini
+    !gains(:) = total_gini
 
     ! calculate gain for every possible split point
-    do i=1, l
-      tmpmask(:) = v <= v(i)
-      j = count(tmpmask)
-      if(j == l) then
-        gains(i) = -1.0
-      else
-        call double_gini_imp(response, l, nclass, tmpmask, j, total_gini)
-        gains(i) = gains(i) - total_gini
-      end if
-    end do
-    gains = gains / l
-    mloc = maxloc(gains, dim=1)
-    o_v = v(mloc)
-    o_gini_score = gains(mloc)
+    ! do i=1, l
+    !   tmpmask(:) = v <= v(i)
+    !   j = count(tmpmask)
+    !   if(j == l) then
+    !     gains(i) = -1.0
+    !   else
+    !     call double_gini_imp(response, l, nclass, tmpmask, j, total_gini)
+    !     gains(i) = gains(i) - total_gini
+    !   end if
+    ! end do
+
+    ! mloc = maxloc(gains, dim=1)
+    ! o_v = v(mloc)
+    ! o_gini_score = gains(mloc)
 
     ! trying something new
     ! rather than evaluate every split point, let's use a greedy approach
     ! I'm going to use simulated annealing to traverse the space
+    vmax = maxval(pack(v, v < maxval(v)))
+    vmin = minval(v)
+    cur_thresh = (vmax+vmin)/2.0
+    tmpmask(:) = v <= cur_thresh
+    call double_gini_imp(response, l, nclass, tmpmask, count(tmpmask), cur_gain)
+    cur_gain = total_gini - cur_gain
 
+    do i=1, 64
+      !print *, cur_thresh, cur_gain
+      ! push it away from the maxes
+      if(cur_thresh >= vmax) then
+        cur_thresh = vmax
+        tmpmask(:) = v <= cur_thresh
+        call double_gini_imp(response, l, nclass, tmpmask, count(tmpmask), cur_gain)
+        cur_gain = total_gini - cur_gain
+      end if
+
+      new_thresh = cur_thresh + ((vmax - cur_thresh) / 100.0)
+      tmpmask(:) = v <= new_thresh
+      call double_gini_imp(response, l, nclass, tmpmask, count(tmpmask), new_gain)
+      new_gain = total_gini - new_gain
+      change = new_gain - cur_gain
+      if(abs(change) < 0.001) exit
+      ! convert to percentage
+      change = change / cur_gain
+      if(change > 1) change = 0.95
+      if(change < 0) then
+        if(cur_thresh == vmin) exit
+        ! gain has gotten worse, go the other way by (distance to min) * (percent change)
+        cur_thresh = cur_thresh + ((vmin-cur_thresh)*(change / cur_gain)) * ((65.0-i)/64.0)
+      else
+        ! gain improved, go forward by (distance to max) * (pct change)
+        cur_thresh = cur_thresh + ((vmax-cur_thresh)*(change / cur_gain)) * ((65.0-i)/64.0)
+      endif
+
+      tmpmask(:) = v <= cur_thresh
+      call double_gini_imp(response, l, nclass, tmpmask, count(tmpmask), cur_gain)
+      cur_gain = total_gini - cur_gain
+    end do
+
+    o_v = cur_thresh
+    o_gini_score = cur_gain
   end subroutine find_gini_split
 
 end module cart_methods
