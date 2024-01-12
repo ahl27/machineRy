@@ -6,6 +6,11 @@ module utilfuncs
       real(c_double) :: x
     end function unifRand
 
+    function normRand() result(x) bind(C, name="norm_rand")
+      use iso_c_binding, only: c_double
+      real(c_double) :: x
+    end function normRand
+
     subroutine getRNGseed() bind(C, name="GetRNGstate")
     end subroutine getRNGseed
 

@@ -53,7 +53,7 @@ RandForest <- function(formula, data, subset, verbose=TRUE,
 }
 
 show.DecisionTree <- function(object){
-  all_indices <- inverse.rle(object$indices)
+  #all_indices <- inverse.rle(object$indices)
   num_leaves <- sum(all_indices == -1)
   num_internal <- sum(all_indices != -1)
   cat(paste("A DecisionTree object with", num_leaves,
@@ -90,10 +90,15 @@ print.DecisionTree <- function(x, ...){
 }
 
 initDTStructure <- function(l){
+  # structure(list(pointer=l[[1]],
+  #           indices=rle(l[[2]]),
+  #           thresholds=rle(l[[3]]),
+  #           ginis=rle(l[[4]])),
+  #           class="DecisionTree")
   structure(list(pointer=l[[1]],
-            indices=rle(l[[2]]),
-            thresholds=rle(l[[3]]),
-            ginis=rle(l[[4]])),
+            indices=l[[2]],
+            thresholds=l[[3]],
+            ginis=l[[4]]),
             class="DecisionTree")
 }
 
@@ -160,8 +165,8 @@ predict.RandForest <- function(rf, newdata=NULL, na.action=na.pass){
   colnames(results) <- attr(rf, "class_levels")
   for(i in seq_along(rf)){
     treeobj <- rf[[i]]
-    for(i in seq(2,4))
-      treeobj[[i]] <- inverse.rle(treeobj[[i]])
+    #for(i in seq(2,4))
+    #  treeobj[[i]] <- inverse.rle(treeobj[[i]])
     p <- .Call("R_rfpredict", treeobj, t(x), nc, nentries)
     p <- as.integer(p)
     idxs <- cbind(seq_len(nentries), p)

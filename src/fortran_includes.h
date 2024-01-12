@@ -6,6 +6,7 @@
 void F77_SUB(GetRNGstate)(void) { GetRNGstate(); }
 void F77_SUB(PutRNGstate)(void) { PutRNGstate(); }
 double F77_SUB(unif_rand)(void) { return unif_rand(); }
+double F77_SUB(norm_rand)(void) { return norm_rand(); }
 
 extern void F77_NAME(tabulate_double)(double *v, int *l, double *out_val, int *out_count, int *ctr);
 extern void F77_NAME(tabulate_int)(int *v, int *l, int *out_val, int *out_count, int *ctr);

@@ -111,6 +111,68 @@ contains
     o_v = divisor*(1.0-sum(cc_left**2)) + (1-divisor)*(1.0-sum(cc_right**2))
   end subroutine double_gini_imp
 
+  subroutine find_gini_sim_anneal(v, response, l, nclass, tempmax, o_v, o_gini_score)
+    use, intrinsic :: iso_c_binding, only: c_int, c_double
+    use :: utilfuncs
+    implicit none
+    integer(c_int), intent(in) :: l, nclass, tempmax
+    integer(c_int), intent(in) :: response(l)
+    real(c_double), intent(in) :: v(l)
+    real(c_double), intent(out) :: o_gini_score, o_v
+
+
+    ! local variables
+    real(c_double) :: cur_score, cur_thresh, roll, temp, new_thresh, new_score, scale_fac, vmax, vmin
+    integer(c_int) :: i
+    logical :: shouldSwap, tmpmask(l)
+
+    ! If we have too many data points, use simulated annealing
+    ! This works really well regardless of the number of iterations -- beating RF with only 10
+    vmax = maxval(v)
+    vmin = minval(v)
+    cur_thresh = (vmax+vmin)/2.0
+    tmpmask(:) = v <= cur_thresh
+    call double_gini_imp(response, l, nclass, tmpmask, count(tmpmask), cur_score)
+
+    ! minimize the weighted gini importance, corresponds to maximizing gini gain
+    scale_fac = 0.33 * (vmax-vmin)
+    call getRNGseed()
+    do i=1, tempmax
+      shouldSwap = .false.
+      temp = 1 - ((i-1) / tempmax)
+      ! 1. generate a random new candidate
+      !roll = normRand() * scale_fac
+      roll = unifRand() * scale_fac
+      new_thresh = cur_thresh + roll
+
+      ! if the roll is out of bounds, I'm just going to reflect it back in range
+      if(new_thresh > vmax) new_thresh = 2*vmax - new_thresh
+      if(new_thresh < vmin) new_thresh = 2*vmin - new_thresh
+      tmpmask(:) = v <= new_thresh
+
+      if(new_thresh == cur_thresh) cycle
+      call double_gini_imp(response, l, nclass, tmpmask, count(tmpmask), new_score)
+
+      ! 2. Probabalistically move to the new state based on temperature
+      if(new_score < cur_score) then
+        shouldSwap = .true.
+      else
+        temp = exp((cur_score-new_score) / temp)
+        roll = unifRand()
+        if(roll <= temp) shouldSwap = .true.
+      end if
+
+      if(shouldSwap) then
+        cur_score = new_score
+        cur_thresh = new_thresh
+      end if
+    end do
+    call putRNGseed()
+
+    o_v = cur_thresh
+    o_gini_score = cur_score
+  end subroutine find_gini_sim_anneal
+
   subroutine find_gini_split(v, response, l, nclass, o_v, o_gini_score) bind(C, name="find_gini_split_")
     ! Here I'm going to assume that scores are INTEGERS on scale 1:n
     use, intrinsic :: iso_c_binding, only: c_int, c_double
@@ -121,78 +183,38 @@ contains
     real(c_double), intent(in) :: v(l)
     real(c_double), intent(out) :: o_gini_score, o_v
 
-    integer(c_int) :: i, j, mloc
-    real(c_double) :: total_gini, gains(l)
+    ! local variables
+    integer(c_int) :: i, j, mloc, tempmax
+    real(c_double) :: total_gini, gains(l), tmpscore
     logical :: tmpmask(l)
 
-    ! test variables
-    real(c_double) :: cur_gain, new_gain, cur_thresh, new_thresh, change, vmax, vmin
+    tempmax = 10
 
     ! calculate the base gini impurity
     call gini_imp(response, l, nclass, total_gini)
-    !gains(:) = total_gini
 
-    ! calculate gain for every possible split point
-    ! do i=1, l
-    !   tmpmask(:) = v <= v(i)
-    !   j = count(tmpmask)
-    !   if(j == l) then
-    !     gains(i) = -1.0
-    !   else
-    !     call double_gini_imp(response, l, nclass, tmpmask, j, total_gini)
-    !     gains(i) = gains(i) - total_gini
-    !   end if
-    ! end do
+    ! if the data are small, just calculate gain for every possible split point
+    if(l <= tempmax) then
+      gains(:) = total_gini
+      do i=1, l
+        tmpmask(:) = v <= v(i)
+        j = count(tmpmask)
+        if(j == l) then
+          gains(i) = -1.0
+        else
+          call double_gini_imp(response, l, nclass, tmpmask, j, total_gini)
+          gains(i) = gains(i) - total_gini
+        end if
+      end do
 
-    ! mloc = maxloc(gains, dim=1)
-    ! o_v = v(mloc)
-    ! o_gini_score = gains(mloc)
-
-    ! trying something new
-    ! rather than evaluate every split point, let's use a greedy approach
-    ! I'm going to use simulated annealing to traverse the space
-    vmax = maxval(pack(v, v < maxval(v)))
-    vmin = minval(v)
-    cur_thresh = (vmax+vmin)/2.0
-    tmpmask(:) = v <= cur_thresh
-    call double_gini_imp(response, l, nclass, tmpmask, count(tmpmask), cur_gain)
-    cur_gain = total_gini - cur_gain
-
-    do i=1, 64
-      !print *, cur_thresh, cur_gain
-      ! push it away from the maxes
-      if(cur_thresh >= vmax) then
-        cur_thresh = vmax
-        tmpmask(:) = v <= cur_thresh
-        call double_gini_imp(response, l, nclass, tmpmask, count(tmpmask), cur_gain)
-        cur_gain = total_gini - cur_gain
-      end if
-
-      new_thresh = cur_thresh + ((vmax - cur_thresh) / 100.0)
-      tmpmask(:) = v <= new_thresh
-      call double_gini_imp(response, l, nclass, tmpmask, count(tmpmask), new_gain)
-      new_gain = total_gini - new_gain
-      change = new_gain - cur_gain
-      if(abs(change) < 0.001) exit
-      ! convert to percentage
-      change = change / cur_gain
-      if(change > 1) change = 0.95
-      if(change < 0) then
-        if(cur_thresh == vmin) exit
-        ! gain has gotten worse, go the other way by (distance to min) * (percent change)
-        cur_thresh = cur_thresh + ((vmin-cur_thresh)*(change / cur_gain)) * ((65.0-i)/64.0)
+      mloc = maxloc(gains, dim=1)
+      o_v = v(mloc)
+      o_gini_score = gains(mloc)
       else
-        ! gain improved, go forward by (distance to max) * (pct change)
-        cur_thresh = cur_thresh + ((vmax-cur_thresh)*(change / cur_gain)) * ((65.0-i)/64.0)
-      endif
-
-      tmpmask(:) = v <= cur_thresh
-      call double_gini_imp(response, l, nclass, tmpmask, count(tmpmask), cur_gain)
-      cur_gain = total_gini - cur_gain
-    end do
-
-    o_v = cur_thresh
-    o_gini_score = cur_gain
+        ! otherwise, use simulated annealing
+        call find_gini_sim_anneal(v, response, l, nclass, tempmax, o_v, tmpscore)
+        o_gini_score = total_gini - tmpscore
+    end if
   end subroutine find_gini_split
 
 end module cart_methods
