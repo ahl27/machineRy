@@ -16,6 +16,7 @@
 
 // for math functions
 #include <math.h>
+#include <time.h>
 
 // R_init_machineRy.c
 void R_init_machineRy(DllInfo *info);

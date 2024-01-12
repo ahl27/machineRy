@@ -249,6 +249,7 @@ double predict_for_input(DTN *tree, double *data){
 void learntreeclassif_helper(DTN *node, double *data, int *class_response,
                               int nrows, int ncols, int nclasses, int num_to_check,
                               int cur_depth, int max_depth, int min_nodesize){
+  R_CheckUserInterrupt();
   // IMPORTANT: *data is assumed to malloc'd elsewhere
   // *data WILL BE FREE'd IN THIS FUNCTION
   // the same is true of *class_response
@@ -304,6 +305,13 @@ void learntreeclassif_helper(DTN *node, double *data, int *class_response,
   int ind = node->index;
   int nrow_left = 0, nrow_right=0;
   double *v = &data[nrows*ind];
+  if(ind == -1){
+    node->left = NULL;
+    node->right = NULL;
+    free(data);
+    free(class_response);
+    return;
+  }
 
   // How big do we need the new arrays to be?
   for(int i=0; i<nrows; i++){
@@ -381,20 +389,26 @@ void split_decision_node_classif(DTN *node, double *data, int *class_response,
 
   double *results = malloc(sizeof(double) * num_to_check);
   double *gini_gain = malloc(sizeof(double) * num_to_check);
-  double curmax = -0.5;
+  double curmax = 0;
   choice = -1;
   for(int i=0; i<num_to_check; i++){
     F77_CALL(find_gini_split)(&data[nrows*cols[i]], class_response, &nrows, &nclass, &results[i], &gini_gain[i]);
-    if(gini_gain[i] > curmax){
+    if(gini_gain[i] >= curmax){
+      // using geq in case we find a split that also leaves gini unchanged
+      // a split with equal gini is better than just terminating (probably?)
       choice = i;
       curmax = gini_gain[i];
     }
   }
-
-  node->threshold = results[choice];
-  node->index = cols[choice];
-  node->gini_gain = curmax;
-
+  if(choice == -1){
+    node->index = -1;
+    node->threshold = 1.0; //fix later
+    node->gini_gain = 0.0;
+  } else {
+    node->threshold = results[choice];
+    node->index = cols[choice];
+    node->gini_gain = curmax;
+  }
 
   free(results);
   free(gini_gain);

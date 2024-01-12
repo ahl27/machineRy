@@ -57,22 +57,59 @@ contains
     integer(c_int), intent(in) :: classes(l)
     real(c_double), intent(out) :: o_v
 
-    real(c_double) :: class_counts(nclass), total
-    integer(c_int) :: i
+    real(c_double) :: class_counts(nclass), sum_amt
+    integer(c_int) :: i, j
     if(l == 0) then
       o_v = 1.0
       return
     end if
 
-    do i=1, nclass
-      class_counts(i) = 0.0+count(classes==i) ! cast to double for later
-    end do
+    ! i have a feeling this is slow
+    ! do i=1, nclass
+    !   class_counts(i) = 0.0+count(classes==i) ! cast to double for later
+    ! end do
 
-    total = sum(class_counts)
-    o_v = 1.0-sum((class_counts / total)**2)
+    ! total is always just l
+    ! total = sum(class_counts)
+    sum_amt = 1.0/l
+    do i=1, l
+      j = classes(i)
+      class_counts(j) = class_counts(j) + sum_amt
+    end do
+    o_v = 1.0-sum(class_counts**2)
   end subroutine gini_imp
 
-  pure subroutine find_gini_split(v, response, l, nclass, o_v, o_gini_score) bind(C, name="find_gini_split_")
+  subroutine double_gini_imp(classes, l, nclass, mask, mask_count, o_v)
+    use, intrinsic :: iso_c_binding, only: c_int, c_double
+    implicit none
+    integer(c_int), intent(in) :: l, nclass, mask_count
+    integer(c_int), intent(in) :: classes(l)
+    logical, intent(in) :: mask(l)
+    real(c_double), intent(out) :: o_v
+
+    real(c_double) :: cc_left(nclass), cc_right(nclass), sum_amt
+    integer(c_int) :: i, j
+
+    cc_left(:) = 0.0
+    cc_right(:) = 0.0
+    sum_amt = 1.0
+    do i=1, l
+      j = classes(i)
+      if(mask(i)) then
+        cc_left(j) = cc_left(j) + 1.0
+      else
+        cc_right(j) = cc_right(j) + 1.0
+      end if
+    end do
+
+    if(mask_count .ne. 0) cc_left = cc_left / mask_count
+    if(mask_count .ne. l) cc_right = cc_right / (l-mask_count)
+
+    ! return weighted gini impurity
+    o_v = (mask_count/l)*(1.0-sum(cc_left**2)) + ((l-mask_count)/l)*(1.0-sum(cc_right**2))
+  end subroutine double_gini_imp
+
+  subroutine find_gini_split(v, response, l, nclass, o_v, o_gini_score) bind(C, name="find_gini_split_")
     ! Here I'm going to assume that scores are INTEGERS on scale 1:n
     use, intrinsic :: iso_c_binding, only: c_int, c_double
     implicit none
@@ -82,33 +119,36 @@ contains
     real(c_double), intent(in) :: v(l)
     real(c_double), intent(out) :: o_gini_score, o_v
 
-    integer(c_int) :: i, mloc
+    integer(c_int) :: i, j, mloc
     real(c_double) :: total_gini, gains(l)
     logical :: tmpmask(l)
+
+    ! test variables
 
     ! calculate the base gini impurity
     call gini_imp(response, l, nclass, total_gini)
     gains(:) = total_gini
 
-    ! Calculate the gini gain for every possible split point
-    do concurrent(i=1:l)
-    !do i=1, l
+    ! calculate gain for every possible split point
+    do i=1, l
       tmpmask(:) = v <= v(i)
-      if(count(tmpmask) == l) then
+      j = count(tmpmask)
+      if(j == l) then
         gains(i) = -1.0
       else
-        call gini_imp(pack(response, tmpmask), count(tmpmask), nclass, total_gini)
-        gains(i) = gains(i) - (total_gini * count(tmpmask)) / l
-        tmpmask(:) = .not. tmpmask
-        call gini_imp(pack(response, tmpmask), count(tmpmask), nclass, total_gini)
-        gains(i) = gains(i) - (total_gini * count(tmpmask)) / l
+        call double_gini_imp(response, l, nclass, tmpmask, j, total_gini)
+        gains(i) = gains(i) - total_gini
       end if
     end do
-
     gains = gains / l
     mloc = maxloc(gains, dim=1)
     o_v = v(mloc)
     o_gini_score = gains(mloc)
+
+    ! trying something new
+    ! rather than evaluate every split point, let's use a greedy approach
+    ! I'm going to use simulated annealing to traverse the space
+
   end subroutine find_gini_split
 
 end module cart_methods
