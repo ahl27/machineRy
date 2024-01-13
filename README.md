@@ -1,7 +1,8 @@
 # machineRy: Machine Learning Models for R
 
-This is somewhat of a sandbox for me to write machine learning models that will be
-incorporated into other packages (e.g., SynExtend).
+This is somewhat of a sandbox for me to write machine learning models that will be incorporated into other packages. You're welcome to clone/download this repo and use it in R, but bear in mind that this is **not** a stable build. Use at your own risk.
+
+Final versions will be added to the SynExtend package when they're at a point where I'm confident they work as advertised and won't crash R. 
 
 Current implementations:
 
