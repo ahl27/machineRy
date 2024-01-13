@@ -67,10 +67,6 @@ SEXP R_learn_tree_classif(SEXP DATA, SEXP NROWS, SEXP NCOLS, SEXP CLASSES, SEXP 
   // pointer right away and return it, since I think that's easier.
   // Avoids a double call, and most people will predict right after
   // training anyway.
-  // Original:
-  // // Don't need the tree anymore, so we can free it
-  // // When we predict with the model we'll reinitialize it (lazy)
-  // //freeDecisionTree(head);
 
   // Read values back into R
   SEXP R_retval = PROTECT(allocVector(VECSXP, 4));
