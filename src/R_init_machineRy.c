@@ -17,6 +17,8 @@ static const R_CallMethodDef callMethods[] = { // method name, num args
   CALLDEF(R_learn_tree_classif, 8),
   CALLDEF(R_get_treeptr, 4),
   CALLDEF(R_rfpredict, 4),
+  CALLDEF(R_fastLP, 4),
+  CALLDEF(R_convertgraph, 5),
   CALLDEF(test_bfs_q2tree, 4),
   CALLDEF(test_tabulate, 2),
   {NULL, NULL, 0}
