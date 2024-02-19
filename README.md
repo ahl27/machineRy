@@ -8,6 +8,7 @@ Current implementations:
 
 - Feed-forward multilayer perceptron: sort of works, pretty buggy
 - Random Forest: works for classification with numerical inputs, working on regression and categorical features
+- Fast Label Propagation: Works for `igraph` graphs with integer labels. Working on supporting arbitrary vertex labels.
 
 # Current Stats:
 
@@ -36,3 +37,8 @@ randomForest        0.522 1.871 6.177 20.545 68.069 301.170
 machineRy           0.512 1.651 5.052 15.901 53.976 220.985
 ```
 
+## Label Propagation vs. `igraph::cluster_label_prop`
+
+Performance is roughly identical on weighted LFR graph benchmarks (measured using AMI). Runtime of this implementation is roughly 2x faster than `igraph`.
+Most of the runtime is dedicated to converting `igraph`-style graphs into something I can work with; final implementation for `SynExtend` should be significantly
+faster since I won't be working with `igraph` graphs.
