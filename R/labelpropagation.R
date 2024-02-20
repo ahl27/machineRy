@@ -23,18 +23,18 @@ sigTransform_network <- function(l, slope=1, scale=0.5, cutoff=0.1){
 
 consensus_clustering <- function(cl){
   nclust <- ncol(cl)
-  l <- vector("list", nrow(cl))
+  nvert <- nrow(cl)
+  l <- vector("list", nvert)
+
   for(i in seq_along(l)){
-    # huge time sink, big memory sink
-    r <- table(unlist(apply(cl, 2, \(x) which(x==x[i])))) # 630
-    l[[i]][[1]] <- as.integer(names(r))
-    names(r) <- NULL
-    r <- r / nclust
-    l[[i]][[2]] <- r
+    cnts <- .Call("R_fastcount", cl, nvert, i) / nclust
+    to_pull <- cnts!=0
+    p <- (seq_len(nvert))[to_pull]
+    cnts <- cnts[to_pull]
+    l[[i]] <- list(p, cnts)
   }
-  # functionally infinite iterations,
-  # 1e9 guards against infinite loops
-  run_label_prop(l, Inf) # 620
+
+  run_clabel_prop(l, nvert)
 }
 
 run_clabel_prop <- function(network, max_iter=Inf){
@@ -131,8 +131,14 @@ run_label_prop <- function(network, max_iter=Inf){
 fast_convert_igraph <- function(g, add_self_loop=FALSE){
   # TODO: handle named vertices
   df <- as_data_frame(g, 'both')
+  vertex_names <- df$vertices[[1]]
+  vertex_map <- match(vertex_names, (vertex_names <- unique(vertex_names)))
+  names(vertex_map) <- vertex_names
+  e1 <- vertex_map[(df$edges[[1]])]
+  e2 <- vertex_map[(df$edges[[2]])]
+  w <- df$edges[[3]]
   prelim_g <- .Call("R_convertgraph",
-                    as.integer(df$edges[[1]])-1L, as.integer(df$edges[[2]])-1L,
+                    e1-1L, e2-1L,
                     df$edges[[3]], nrow(df$edges), nrow(df$vertices))
   for(i in seq_along(prelim_g)){
     prelim_g[[i]][[1]] <- prelim_g[[i]][[1]] + 1L
@@ -143,28 +149,35 @@ fast_convert_igraph <- function(g, add_self_loop=FALSE){
     }
   }
 
-  prelim_g
+  list(graph=prelim_g, vnames=vertex_names)
 }
 
 LP_igraph <- function(g, max_iterations, add_self_loop=FALSE, consensus=FALSE, useC=FALSE){
-  el <- fast_convert_igraph(g, add_self_loop)
-
-  if(consensus){
+  elg <- fast_convert_igraph(g, add_self_loop)
+  el <- elg$graph
+  elvn <- elg$vnames
+  useConsensus <- (is.logical(consensus) && consensus) || is.numeric(consensus)
+  if(useConsensus){
+    if(is.logical(consensus))
+      to_iter <- c(0, 0.2,0.4,0.6,0.8,1,1.33,1.67,2)
+    else
+      to_iter <- consensus
     ncores <- max(parallel::detectCores()-1L, 1)
     ncores <- 1
-    to_iter <- seq(0, 2, by=0.1)
+    to_iter <- c(seq(0, 0.9, by=0.1), seq(1,2,by=0.25))
     if(ncores > 1){
       a <- mclapply(to_iter, \(i){
-        run_label_prop(sigTransform_network(el, slope=i, cutoff=0.2), max_iterations)
+        run_clabel_prop(sigTransform_network(el, slope=i, cutoff=0.2), max_iterations)
       }, mc.cores=ncores)
       assignments <- do.call(cbind, a)
     } else {
       assignments <- matrix(nrow=length(el), ncol=length(to_iter))
       for(i in seq_along(to_iter)){
         l <- sigTransform_network(el, slope=to_iter[i], cutoff=0.2) # 40
-        assignments[,i] <- run_label_prop(l, max_iterations) # 1920
+        assignments[,i] <- run_clabel_prop(l, max_iterations) # 1920
       }
     }
+    #return(assignments)
     res <- consensus_clustering(assignments) # 1230
   } else {
     if(useC){
@@ -173,6 +186,11 @@ LP_igraph <- function(g, max_iterations, add_self_loop=FALSE, consensus=FALSE, u
       res <- run_label_prop(el, max_iterations)
     }
   }
+  names(res) <- elvn
+  if(!any(grepl('[^0-9.]', elvn)))
+    res <- res[order(as.numeric(elvn))]
+  else
+    res <- res[order(elvn)]
   res
 }
 

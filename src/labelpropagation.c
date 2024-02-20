@@ -170,6 +170,7 @@ SEXP R_fastLP(SEXP NETWORK, SEXP MAX_ITER, SEXP NLEN, SEXP SQUEUE){
 		if(++subiter == n){
 			subiter = 0;
 			iter++;
+			R_CheckUserInterrupt();
 		}
 	}
 
@@ -249,4 +250,23 @@ SEXP R_convertgraph(SEXP V1, SEXP V2, SEXP WEIGHT, SEXP NROW, SEXP NVERT){
 	free(vert_edges_count);
 	UNPROTECT(1);
 	return(OUT_GRAPH);
+}
+
+SEXP R_fastcount(SEXP LVEC, SEXP NVERT, SEXP OFFSET){
+	int *lv = INTEGER(LVEC);
+	int mod = INTEGER(NVERT)[0];
+	int l = LENGTH(LVEC);
+	int offset = INTEGER(OFFSET)[0]-1;
+	int to_check = -1;
+
+	SEXP OUTVEC = PROTECT(allocVector(INTSXP, mod));
+	int *outvec = INTEGER(OUTVEC);
+	memset(outvec, 0, mod*sizeof(int));
+	for(int i=0; i<l; i++){
+		if(!(i%mod)) to_check = lv[i+offset];
+		outvec[i%mod] += lv[i]==to_check;
+	}
+
+	UNPROTECT(1);
+	return(OUTVEC);
 }

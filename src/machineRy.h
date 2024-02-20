@@ -46,5 +46,6 @@ SEXP test_tabulate(SEXP V, SEXP L);
 /**** Label Propagation ****/
 SEXP R_fastLP(SEXP NETWORK, SEXP MAX_ITER, SEXP NLEN, SEXP SQUEUE);
 SEXP R_convertgraph(SEXP V1, SEXP V2, SEXP WEIGHT, SEXP NROW, SEXP NVERT);
+SEXP R_fastcount(SEXP LVEC, SEXP MOD, SEXP OFFSET);
 
 #endif
