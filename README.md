@@ -8,7 +8,8 @@ Current implementations:
 
 - Feed-forward multilayer perceptron: sort of works, pretty buggy
 - Random Forest: works for classification with numerical inputs, working on regression and categorical features
-- Fast Label Propagation: Works for `igraph` graphs with integer labels. Working on supporting arbitrary vertex labels.
+- Fast Label Propagation: Works for `igraph` graphs. Consensus clustering across weight differentials 
+also working.
 
 # Current Stats:
 
@@ -42,3 +43,8 @@ machineRy           0.512 1.651 5.052 15.901 53.976 220.985
 Performance is roughly identical on weighted LFR graph benchmarks (measured using AMI). Runtime of this implementation is roughly 2x faster than `igraph`.
 Most of the runtime is dedicated to converting `igraph`-style graphs into something I can work with; final implementation for `SynExtend` should be significantly
 faster since I won't be working with `igraph` graphs.
+
+Consensus clustering runs slower than either `igraph` or my label propagation, mainly because multiple 
+runs are required. This implementation beats `igraph` and my LP algorithm in accuracy. Runtime is about 
+10x slower because it does about 10 LP runs. Scaling on all algorithms is approximately linear (0.76 for 
+my LP, 0.94 for `igraph`, 1.33 for consensus clustering).
