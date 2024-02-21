@@ -54,6 +54,7 @@ RandForest <- function(formula, data, subset, verbose=TRUE,
 
 show.DecisionTree <- function(object){
   #all_indices <- inverse.rle(object$indices)
+  all_indices <- object$indices
   num_leaves <- sum(all_indices == -1)
   num_internal <- sum(all_indices != -1)
   cat(paste("A DecisionTree object with", num_leaves,
@@ -145,26 +146,26 @@ RandForest.fit <- function(x, y=NULL, verbose=TRUE, ntree=10,
   l
 }
 
-predict.RandForest <- function(rf, newdata=NULL, na.action=na.pass){
-  tt <- terms(attr(rf, 'formula'), data=newdata)
+predict.RandForest <- function(object, newdata=NULL, na.action=na.pass, ...){
+  tt <- terms(attr(object, 'formula'), data=newdata)
   noData <- (missing(newdata) || is.null(newdata))
   if(noData){
-    x <- model.matrix(rf)
+    x <- model.matrix(object)
     mmDone <- TRUE
     return()
   } else {
     Terms <- delete.response(tt)
     m <- model.frame(Terms, newdata, na.action = na.action)
-    x <- model.matrix(Terms, m, contrasts.arg=attr(rf, 'contrasts'))
+    x <- model.matrix(Terms, m, contrasts.arg=attr(object, 'contrasts'))
     mmDone <- FALSE
   }
 
   nentries <- nrow(x)
   nc <- ncol(x)
-  results <- matrix(0.0, nrow=nentries, ncol=length(attr(rf, "class_levels")))
-  colnames(results) <- attr(rf, "class_levels")
-  for(i in seq_along(rf)){
-    treeobj <- rf[[i]]
+  results <- matrix(0.0, nrow=nentries, ncol=length(attr(object, "class_levels")))
+  colnames(results) <- attr(object, "class_levels")
+  for(i in seq_along(object)){
+    treeobj <- object[[i]]
     #for(i in seq(2,4))
     #  treeobj[[i]] <- inverse.rle(treeobj[[i]])
     p <- .Call("R_rfpredict", treeobj, t(x), nc, nentries)
@@ -173,6 +174,6 @@ predict.RandForest <- function(rf, newdata=NULL, na.action=na.pass){
     results[idxs] <- results[idxs] + 1.0
   }
 
-  results <- results / length(rf)
+  results <- results / length(object)
   results
 }

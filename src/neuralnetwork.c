@@ -139,12 +139,14 @@ NNLayer* allocLayer(int in, int out, char fxnChoice){
   newLayer->state = calloc(out, sizeof(double));
   newLayer->bias = calloc(out, sizeof(double));
 
+  GetRNGstate();
   // randomly initialize weights in [-1,1]
   for(int i=0; i<in*out; i++)
-    newLayer->weights[i] = (rand() % 2 ? -1 : 1) * (float)rand() / (float)(RAND_MAX);
+    newLayer->weights[i] = (unif_rand() * 2) - 1;
 
   for(int i=0; i<out; i++)
-    newLayer->bias[i] = (rand() % 2 ? -1 : 1) * (float)rand() / (float)(RAND_MAX);
+    newLayer->bias[i] = (unif_rand() * 2) - 1;
+  PutRNGstate();
 
   return newLayer;
 }
@@ -417,12 +419,13 @@ void testAfxn(AFunc af){
 }
 
 double genRandFloat(int max){
-  return (rand() % 2 ? -1 : 1) * (float)rand() / (float)(RAND_MAX/max);
+  GetRNGstate();
+  double roll = (unif_rand() < 0.5 ? 1 : -1) * (unif_rand() * max);
+  PutRNGstate();
+  return roll;
 }
 
 void testnetwork(){
-  srand(time(NULL));
-  //srand(11);
   int num_layers = 4;
   int layer_sizes[] = {10, 10, 10, 1};
   char a_functions[] = {'R', 'R', 'R', 'S'};

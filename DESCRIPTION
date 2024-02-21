@@ -6,5 +6,8 @@ Authors@R:
            comment = c(ORCID = "0000-0002-9465-6785"))
 Description: Implements several machine learning models for R, including 
             random forests and feedforward multilayer perceptrons.
-License: `use_mit_license()`
+Depends: R (>= 4.3.0)
+Imports: methods, stats, utils, igraph
+Suggests: randomForest
+License: GPL-3
 Encoding: UTF-8

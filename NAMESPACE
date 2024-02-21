@@ -1,8 +1,16 @@
 useDynLib(machineRy)
-exportPattern("^[^\\.]")
+
+import(methods)
+import(stats)
+import(utils)
+importFrom("igraph", "as_data_frame", "cluster_label_prop")
 
 S3method(show, "DecisionTree")
 S3method(show, "RandForest")
 S3method(print, "RandForest")
 S3method(print, "DecisionTree")
 S3method(predict, "RandForest")
+
+export(LP_igraph)
+export(RandForest)
+export(deparse_communities)

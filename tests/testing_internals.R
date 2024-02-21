@@ -97,11 +97,11 @@ test_grow_tree <- function(nvars, nclasses, nsamp,
 
 test_run_rf <- function(nentries){
   df <- data.frame(v1=runif(nentries), v2=runif(nentries),
-                   v3=rnorm(nentries), v4=sample(c(T,F), nentries, r=T),
-                   y=as.factor(sample(1:3, nentries, r=TRUE)))
+                   v3=rnorm(nentries), v4=sample(c(T,F), nentries, replace=TRUE),
+                   y=as.factor(sample(1:3, nentries, replace=TRUE)))
   df <- data.frame(v1=runif(nentries), v2=runif(nentries),
                    v3=rnorm(nentries), v4=rgamma(nentries, 2),
-                   y=as.factor(sample(1:3, nentries, r=TRUE)))
+                   y=as.factor(sample(1:3, nentries, replace=TRUE)))
 
   rf <- RandForest(y~., data=df, ntree=10L, nodesize=5L)
   subsamp <- sample(seq_len(nentries), 100L)
@@ -115,8 +115,7 @@ test_run_rf <- function(nentries){
   }, logical(1L))
   cat("We got ", sum(pred_corr), "% correct\n", sep='')
 
-  require('randomForest')
-  pd <- randomForest(y~., data=df, ntree=10L, nodesize=5L)
+  pd <- randomForest::randomForest(y~., data=df, ntree=10L, nodesize=5L)
   pred <- predict(pd, df[subsamp,])
   res <- cbind(pred, df$y[subsamp])
   pred_corr <- vapply(seq_len(nrow(res)), \(i){

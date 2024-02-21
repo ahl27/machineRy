@@ -1,6 +1,3 @@
-library(machineRy)
-library(randomForest)
-
 nentries <- 1000L
 train_bench <- function(){
 to_iter <- seq(1,5,0.5)
@@ -10,9 +7,9 @@ for(i in seq_along(to_iter)){
   cat("i = ", nentries, '\n')
   df <- data.frame(v1=runif(nentries), v2=runif(nentries),
                    v3=rnorm(nentries), v4=rgamma(nentries, 2L),
-                   y=as.factor(sample(1:3, nentries, r=TRUE)))
+                   y=as.factor(sample(1:3, nentries, replace=TRUE)))
   cat('\t - Original...\n')
-  vOrig[i] <- system.time(randomForest(y~., data=df, nodesize=5, ntree=10L))[3]
+  vOrig[i] <- system.time(randomForest::randomForest(y~., data=df, nodesize=5, ntree=10L))[3]
   cat('\t - New...\n')
   vFort2[i] <- system.time(RandForest(y~., data=df, nodesize=5, verbose=FALSE))[3]
 }
@@ -26,8 +23,8 @@ vPredOrig <- vPredFortran <- numeric(length(to_iter))
 nentries <- 1000L
 df <- data.frame(v1=runif(nentries), v2=runif(nentries),
                  v3=rnorm(nentries), v4=rgamma(nentries, 2L),
-                 y=as.factor(sample(1:3, nentries, r=TRUE)))
-origModel <- randomForest(y~., data=df, nodesize=5, ntree=10L)
+                 y=as.factor(sample(1:3, nentries, replace=TRUE)))
+origModel <- randomForest::randomForest(y~., data=df, nodesize=5, ntree=10L)
 newModel <- RandForest(y~., data=df, nodesize=5, verbose=FALSE)
 
 for(i in seq_along(to_iter)){
@@ -35,7 +32,7 @@ for(i in seq_along(to_iter)){
   cat("i = ", nentries, '\n')
   df <- data.frame(v1=runif(nentries), v2=runif(nentries),
                    v3=rnorm(nentries), v4=rgamma(nentries, 2L),
-                   y=as.factor(sample(1:3, nentries, r=TRUE)))
+                   y=as.factor(sample(1:3, nentries, replace=TRUE)))
 
   cat('\t - Original...\n')
   vPredOrig[i] <- system.time(predict(origModel, df))[3]
@@ -55,9 +52,9 @@ for(i in seq_along(to_iter)){
   cat("i = ", nentries, '\n')
   df <- data.frame(v1=runif(nentries), v2=runif(nentries),
                    v3=rnorm(nentries), v4=rgamma(nentries, 2L),
-                   y=as.factor(sample(1:3, nentries, r=TRUE)))
+                   y=as.factor(sample(1:3, nentries, replace=TRUE)))
   cat('\t - Original...\n')
-  vOrigM[i] <- object.size(randomForest(y~., data=df, nodesize=5, ntree=1L)$forest)[1]
+  vOrigM[i] <- object.size(randomForest::randomForest(y~., data=df, nodesize=5, ntree=1L)$forest)[1]
   cat('\t - New...\n')
   vFortM[i] <- object.size(RandForest(y~., data=df, nodesize=5, ntree=1L, verbose=FALSE))[1]
 }
