@@ -5,6 +5,28 @@
 #include <string.h>
 
 /*
+ * These are needed for outmem_graph.c
+ */
+#include <stdint.h>
+#include <stdio.h>
+#include <limits.h>
+
+// mmap not supported on windows
+#ifdef _WIN32
+  #define mmap(addr, len, prot, flags, fildes, off) error("This function is not available on Windows.\n")
+  #define munmap(addr, len) error("This function is not available on Windows.\n")
+  #define stat(name, st) error("This function is not available on Windows.\n")
+  #define struct stat
+  #define MAP_SHARED
+  #define PROT_READ
+  #define PROT_WRITE
+#else
+  #define HAS_MMAN
+  #include <sys/mman.h>
+  #include <sys/stat.h>
+#endif
+
+/*
  * Rdefines.h is needed for the SEXP typedef, for the error(), INTEGER(),
  * GET_DIM(), LOGICAL(), NEW_INTEGER(), PROTECT() and UNPROTECT() macros,
  * and for the NA_INTEGER constant symbol.
@@ -47,5 +69,10 @@ SEXP test_tabulate(SEXP V, SEXP L);
 SEXP R_fastLP(SEXP NETWORK, SEXP MAX_ITER, SEXP NLEN, SEXP SQUEUE);
 SEXP R_convertgraph(SEXP V1, SEXP V2, SEXP WEIGHT, SEXP NROW, SEXP NVERT);
 SEXP R_fastcount(SEXP LVEC, SEXP MOD, SEXP OFFSET);
+
+/**** out of memory stuff ****/
+SEXP R_hashedgelist(SEXP FILENAME, SEXP TABNAME, SEXP TEMPTABNAME, SEXP OUTDIR, SEXP SEPS, SEXP CTR);
+SEXP test_writing();
+SEXP test_outputs(SEXP TABFILE, SEXP NVERT);
 
 #endif
