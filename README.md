@@ -10,8 +10,9 @@ Current implementations:
 - Random Forest: works for classification with numerical inputs, working on regression and categorical features
 - Fast Label Propagation: Works for `igraph` graphs. Consensus clustering across weight differentials 
 also working.
-- Out of memory clustering: Halfway complete, can load data from a .tsv into 
-a format ready for clustering, working on the actual clustering algorithm.
+- Out of memory clustering: Almost done with initial prototype. Works to 
+cluster with fast label propagation, still need to add postprocessing to 
+return the clusters to R.
 
 # Current Stats:
 
