@@ -54,6 +54,7 @@
 const char DELIM = 23; // 23 = end of transmission block, not really used for anything nowadays
 const int L_SIZE = sizeof(l_uint);
 const l_uint MAX_EDGES_EXACT = 5000; // this is a soft cap -- if above this, we sample edges probabalistically
+const int PRINT_COUNTER_MOD = 10;
 
 typedef struct ll {
 	l_uint id;
@@ -207,7 +208,7 @@ l_uint rw_vertname(const char *vname, const char *dir, l_uint ctr){
 	return ctr+1;
 }
 
-l_uint hash_file_vnames(const char* fname, const char* dname, const char *ftable, const char sep, const char line_sep, l_uint ctr){
+l_uint hash_file_vnames(const char* fname, const char* dname, const char *ftable, const char sep, const char line_sep, l_uint ctr, int v){
 	/*
 	 * fname: .tsv list of edges
 	 * dname: directory of hash codes
@@ -219,6 +220,9 @@ l_uint hash_file_vnames(const char* fname, const char* dname, const char *ftable
 	int cur_pos = 0;
 	char c = getc(f);
 	l_uint found_vert = 0, cur_ctr = ctr, num_edges = 0;
+	l_uint print_counter = 0;
+
+	if(v) Rprintf("Reading file %s...\n", fname);
 
 	while(c != EOF){
 		// going to assume we're at the beginning of a line
@@ -254,8 +258,14 @@ l_uint hash_file_vnames(const char* fname, const char* dname, const char *ftable
 
 		while(c != line_sep && c != EOF) c = getc(f);
 		if(c == line_sep) c=getc(f);
+		if(v){
+			print_counter++;
+			if(print_counter % PRINT_COUNTER_MOD == 0){
+				Rprintf("\t%lu lines read\r", print_counter);
+			}
+		}
 	}
-
+	if(v) Rprintf("\n\t%lu total nodes.\n", cur_ctr-1);
 	fclose(f);
 	fclose(tab);
 	return cur_ctr-1;
@@ -346,7 +356,7 @@ void reformat_counts(const char* curcounts, const char* mastertable, l_uint n_ve
 }
 
 void csr_compress_edgelist(const char* edgefile, const char* dname, const char* curcountfile, const char* ftable,
-														const char sep, const char linesep, l_uint num_v){
+														const char sep, const char linesep, l_uint num_v, int v){
 	/*
 	 * This should be called after we've already read in all our files
 	 * critically, ensure we're rewritten our ftable file such that it is cumulative counts and not vertex counts
@@ -368,9 +378,18 @@ void csr_compress_edgelist(const char* edgefile, const char* dname, const char* 
 	if(!edgelist) errorclose_file(tmptable, mastertable, "error opening edgelist file.\n");
 
 	int status = 1;
+	l_uint print_counter = 0;
+	if(v) Rprintf("Reading edges from file %s...\n", edgefile);
+
 	while(status){
 		status = read_edge_to_table(edgelist, mastertable, tmptable, dname, sep, linesep, entry_size, num_v);
+		if(v){
+			print_counter++;
+			if(print_counter % PRINT_COUNTER_MOD == 0)
+				Rprintf("\t%lu edges read\r", print_counter);
+		}
 	}
+	if(v) Rprintf("\n");
 
 	fclose(mastertable);
 	fclose(tmptable);
@@ -563,45 +582,77 @@ l_uint get_qsize(FILE *q){
 	return ctr;
 }
 
+void initialize_queue(FILE *q, l_uint maxv){
+	GetRNGstate();
+	l_uint j, tmp;
+	for(l_uint i=0; i<maxv; i++){
+		j = (l_uint) trunc(i * (unif_rand()));
+		if(j != i){
+			// guarding edge case where unif_rand() returns 1.0
+
+			// tmp = arr[j]
+			fseek(q, L_SIZE*j, SEEK_SET);
+			fread(&tmp, L_SIZE, 1, q);
+
+			// arr[j] = i
+			fseek(q, -1*L_SIZE, SEEK_CUR);
+			fwrite(&j, L_SIZE, 1, q);
+		} else {
+			tmp = i;
+		}
+
+		// arr[i] = tmp
+		fseek(q, L_SIZE*i, SEEK_SET);
+		fwrite(&tmp, L_SIZE, 1, q);
+	}
+	PutRNGstate();
+
+	return;
+}
+
 void cluster_file(const char* mastertab_fname, const char* clust_fname,
 									const char *qfile_f1, const char *qfile_f2,
-									l_uint num_v, int max_iterations){
+									l_uint num_v, int max_iterations, int v){
 	// temporary implementation for now, will adjust later
 	// main runner function to cluster nodes
 	FILE *masterfile = fopen(mastertab_fname, "rb");
 	FILE *clusterfile = fopen(clust_fname, "rb+");
 	FILE *cur_q, *next_q;
 	const char* queues[] = {qfile_f1, qfile_f2};
+	const char* progress = "\\|/-\\|/-";
 
 	l_uint cluster_res, qsize, tmp_ind;
-	// first pass will randomly go over all nodes and populate a query thing
-	// for first try, we'll just go linear and then add in the random later
-	for(int i=0; i<max_iterations; i++){
-		cur_q = fopen(queues[(i+1)%2], "rb+");
-		next_q = fopen(queues[i%2], "wb+");
-		if(i == 0){
-			for(l_uint i=0; i<num_v; i++){
-				cluster_res = update_node_cluster(i, num_v+1, masterfile, clusterfile);
-				add_to_queue(cluster_res, i, num_v, clusterfile, masterfile, next_q);
-			}
-		} else {
-			qsize = get_qsize(cur_q);
-			Rprintf("Queue size: %lu\n", qsize);
-			if(qsize == 0) break;
 
-			while(fread(&tmp_ind, L_SIZE, 1, cur_q)){
-				cluster_res = update_node_cluster(tmp_ind, num_v+1, masterfile, clusterfile);
-				add_to_queue(cluster_res, tmp_ind, num_v, clusterfile, masterfile, next_q);
-			}
+	// randomly initialize queue
+	if(v) Rprintf("Clustering: |\r");
+	cur_q = fopen(queues[0], "wb+");
+	initialize_queue(cur_q, num_v);
+	fclose(cur_q);
+
+	for(int i=0; i<max_iterations; i++){
+		cur_q = fopen(queues[i%2], "rb+");
+		next_q = fopen(queues[(i+1)%2], "wb+");
+		qsize = get_qsize(cur_q);
+		if(qsize == 0) break;
+
+		while(fread(&tmp_ind, L_SIZE, 1, cur_q)){
+			cluster_res = update_node_cluster(tmp_ind, num_v+1, masterfile, clusterfile);
+			add_to_queue(cluster_res, tmp_ind, num_v, clusterfile, masterfile, next_q);
 		}
+
 		fclose(cur_q);
 		fclose(next_q);
+		if(v) Rprintf("Clustering: %c (%.0f%%)\r", progress[i%8], ((double)(i+1) / max_iterations)*100);
 	}
+	if(v) Rprintf("Clustering: 100%%    \n");
+	fclose(masterfile);
 
 	reformat_clusters(clusterfile, num_v);
 
-	fclose(masterfile);
 	fclose(clusterfile);
+	remove(queues[0]);
+	remove(queues[1]);
+
 	return;
 }
 
@@ -653,13 +704,25 @@ void verify_clusters(const char *filename, l_uint num_v){
 
 
 
-SEXP R_hashedgelist(SEXP FILENAME, SEXP TABNAME, SEXP TEMPTABNAME, SEXP QFILES, SEXP OUTDIR, SEXP SEPS, SEXP CTR, SEXP ITER){
+SEXP R_hashedgelist(SEXP FILENAME, SEXP TABNAME, SEXP TEMPTABNAME, SEXP QFILES, SEXP OUTDIR,
+										SEXP SEPS, SEXP CTR, SEXP ITER, SEXP VERBOSE){
 	/*
 	 * I always forget how to handle R strings so I'm going to record it here
 	 * R character vectors are STRSXPs, which is the same as a list (VECSXP)
 	 * Each entry in a STRSXP is a CHARSXP, accessed with STRING_ELT(str, ind)
 	 * You can get a `const char*` from a CHARSXP with CHAR()
 	 * You can also re-encode with `const char* Rf_translateCharUTF8()`
+	 */
+
+	/*
+	 * Input explanation:
+	 *		 FILENAME: file of edges in format `v1 v2 w`
+	 *      TABNAME: stores CSR compression of graph structure
+	 *	TEMPTABNAME: first used to count edges, then used to store clusters
+	 * 			 QFILES: two files, both used for queues
+	 * 		   OUTDIR: directory to store hashed strings
+	 *
+	 * R_hashedgelist(tsv, csr, clusters, queues, hashdir, seps, 1, iter, verbose)
 	 */
 
 	const char* dir = CHAR(STRING_ELT(OUTDIR, 0));
@@ -670,36 +733,91 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP TABNAME, SEXP TEMPTABNAME, SEXP QFILES, 
 	const char* qfile1 = CHAR(STRING_ELT(QFILES, 0));
 	const char* qfile2 = CHAR(STRING_ELT(QFILES, 1));
 	const int num_iter = INTEGER(ITER)[0];
+	const int verbose = LOGICAL(VERBOSE)[0];
 	l_uint ctr = (l_uint)(REAL(CTR)[0]), num_v;
 
 	// first, index all vertex names and record how many edges each has
-	Rprintf("Hashing file...\n");
- 	num_v = hash_file_vnames(edgefile, dir, temptabfile, seps[0], seps[1], ctr);
- 	Rprintf("Hashed! Total nodes is %lu\nEdge Counts:\n", num_v);
+ 	num_v = hash_file_vnames(edgefile, dir, temptabfile, seps[0], seps[1], ctr, verbose);
+ 	// TODO: support multiple files.
+ 	// 			 This is super easy, just accept CHAR input with length > 1 and call hash_file_vnames for each
+ 	// 			 as long as you update ctr on each run it'll work fine, it's already set up to work like this
 
- 	verify_filecontents(temptabfile, num_v);
 
  	// next, create an indexed table file of where data for each vertex will be located
  	// note that we can modify this later to hash multiple edge files before reformatting
+ 	if(verbose) Rprintf("Reformatting counts file...\n");
  	reformat_counts(temptabfile, tabfile, num_v);
 
 
- 	Rprintf("Counts reformatted!\n");
  	// then, we'll create the CSR compression of all our edges
- 	csr_compress_edgelist(edgefile, dir, temptabfile, tabfile, seps[0], seps[1], num_v);
- 	Rprintf("Edges read in!\n");
+ 	csr_compress_edgelist(edgefile, dir, temptabfile, tabfile, seps[0], seps[1], num_v, verbose);
 
  	// temptabfile now becomes our clustering file
- 	//verify_edgelist(tabfile, num_v);
-
- 	Rprintf("Clustering nodes...\n");
- 	cluster_file(tabfile, temptabfile, qfile1, qfile2, num_v, num_iter);
- 	verify_clusters(temptabfile, num_v);
+ 	cluster_file(tabfile, temptabfile, qfile1, qfile2, num_v, num_iter, verbose);
 
 	SEXP RETVAL = PROTECT(allocVector(REALSXP, 1));
 	REAL(RETVAL)[0] = (double) num_v;
 	UNPROTECT(1);
 	return RETVAL;
+}
+
+SEXP R_write_output_clusters(SEXP CLUSTERFILE, SEXP HASHEDFILES, SEXP NUM_FILES, SEXP OUTFILE, SEXP SEPS){
+	// we're going to leverage list.files() on the R side for this so I don't have to worry
+	// about platform-specific file handling for directory parsing
+
+	/*
+	 * Inputs:
+	 * 	CLUSTERFILE: file of clusters (cluster_counts)
+	 *  HASHEDFILES: character vector of all hash files
+	 *    NUM_FILES: number of hash files
+	 *      OUTFILE: file to write to
+	 *         SEPS: %c%c, entry_sep, line_sep
+	 *
+	 * R_write_output_clusters(cluster_counts, list.files(hashdir), length(...), out_tsvpath, seps)
+	 */
+
+	const int nfiles = INTEGER(NUM_FILES)[0];
+	const char* cfile = CHAR(STRING_ELT(CLUSTERFILE, 0));
+	const char* outfile = CHAR(STRING_ELT(OUTFILE, 0));
+	const char* seps = CHAR(STRING_ELT(SEPS, 0));
+	const char* fname;
+	char buf[MAX_NODE_NAME_SIZE];
+	char write_buf[PATH_MAX];
+	char c;
+	int ctr;
+	l_uint index, clust;
+	FILE *outf = fopen(outfile, "w");
+	FILE *f;
+
+	// remember that indices will be off by one
+	FILE *fclusters = fopen(cfile, "rb");
+	for(int i=0; i<nfiles; i++){
+		fname = CHAR(STRING_ELT(HASHEDFILES,i));
+		f = fopen(fname, "rb");
+		while(!feof(f)){
+			c = getc(f);
+			if(c==EOF) continue;
+			ctr = 0;
+			while(c != DELIM){
+				buf[ctr++] = c;
+				c = getc(f);
+			}
+			buf[ctr] = '\0';
+			// read in the index
+			fread(&index, L_SIZE, 1, f);
+
+			fseek(fclusters, L_SIZE*(index-1), SEEK_SET);
+			fread(&clust, L_SIZE, 1, fclusters);
+			sprintf(write_buf, "%s%c%llu%c", buf, seps[0], clust, seps[1]);
+			fwrite(write_buf, sizeof(char), strlen(write_buf), outf);
+		}
+		fclose(f);
+	}
+
+	fclose(fclusters);
+	fclose(outf);
+
+	return R_NilValue;
 }
 
 SEXP test_writing(){

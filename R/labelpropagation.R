@@ -111,3 +111,56 @@ deparse_communities <- function(commPred){
 
   return(res)
 }
+
+fastlabel_oom <- function(edgelistfile, outfile=tempfile(), iterations=1L,
+                          returnTable=FALSE, verbose=TRUE,
+                          sep='\t', linesep='\n',
+                          tempfiledir=tempdir(), cleanup_files=TRUE){
+  counter_cluster_binary <- tempfile(tmpdir=tempfiledir)
+  csr_table_binary <- tempfile(tmpdir=tempfiledir)
+  qfiles <- c(tempfile(tmpdir=tempfiledir), tempfile(tmpdir=tempfiledir))
+  hashdir <- file.path(tempfiledir, "OOMhashes")
+  if(dir.exists(hashdir)){
+    for(f in list.files(hashdir, full.names=TRUE))
+      file.remove(f)
+  } else {
+    dir.create(hashdir)
+  }
+
+  if(verbose){
+    cat("Temporary files stored at ", tempfiledir, "\n")
+    cat("\tCSR: ", basename(csr_table_binary), "\n")
+    cat("\tClusters: ", basename(counter_cluster_binary), "\n")
+    cat("\tQueue 1: ", basename(qfiles[1]), "\n")
+    cat("\tQueue 2: ", basename(qfiles[2]), "\n")
+    cat("\tHashes: ", basename(hashdir), "\n")
+  }
+
+  seps <- paste(sep, linesep, sep='')
+  ctr <- 1
+  if(!file.exists(edgelistfile)) stop("edgelist file does not exist")
+  # R_hashedgelist(tsv, csr, clusters, queues, hashdir, seps, 1, iter, verbose)
+  .Call("R_hashedgelist", edgelistfile, csr_table_binary,
+        counter_cluster_binary, qfiles, hashdir, seps, ctr, iterations, verbose)
+  all_hashfiles <- list.files(hashdir, full.names = TRUE)
+
+  # R_write_output_clusters(clusters, hashes, length(hashes), out_tsvpath, seps)
+  .Call("R_write_output_clusters", counter_cluster_binary, all_hashfiles,
+        length(all_hashfiles), outfile, seps)
+
+  if(cleanup_files){
+    for(f in c(csr_table_binary, counter_cluster_binary, qfiles))
+      if(file.exists(f)) file.remove(f)
+    for(f in list.files(hashdir, full.names=TRUE))
+      if(file.exists(f)) file.remove(f)
+    file.remove(hashdir)
+  }
+  if(returnTable){
+    tab <- read.table(outfile)
+    colnames(tab) <- c("Vertex", "Cluster")
+    if(file.exists(outfile)) file.remove(outfile)
+    return(tab)
+  } else {
+    return(outfile)
+  }
+}
