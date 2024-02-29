@@ -112,7 +112,7 @@ deparse_communities <- function(commPred){
   return(res)
 }
 
-fastlabel_oom <- function(edgelistfile, outfile=tempfile(), iterations=1L,
+fastlabel_oom <- function(edgelistfiles, outfile=tempfile(), iterations=1L,
                           returnTable=FALSE, verbose=TRUE,
                           sep='\t', linesep='\n',
                           tempfiledir=tempdir(), cleanup_files=TRUE){
@@ -138,9 +138,9 @@ fastlabel_oom <- function(edgelistfile, outfile=tempfile(), iterations=1L,
 
   seps <- paste(sep, linesep, sep='')
   ctr <- 1
-  if(!file.exists(edgelistfile)) stop("edgelist file does not exist")
+  if(!all(file.exists(edgelistfiles))) stop("edgelist file does not exist")
   # R_hashedgelist(tsv, csr, clusters, queues, hashdir, seps, 1, iter, verbose)
-  .Call("R_hashedgelist", edgelistfile, csr_table_binary,
+  .Call("R_hashedgelist", edgelistfiles, length(edgelistfiles), csr_table_binary,
         counter_cluster_binary, qfiles, hashdir, seps, ctr, iterations, verbose)
   all_hashfiles <- list.files(hashdir, full.names = TRUE)
 

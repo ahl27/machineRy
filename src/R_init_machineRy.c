@@ -20,7 +20,7 @@ static const R_CallMethodDef callMethods[] = { // method name, num args
   CALLDEF(R_fastLP, 4),
   CALLDEF(R_convertgraph, 5),
   CALLDEF(R_fastcount, 3),
-  CALLDEF(R_hashedgelist, 9),
+  CALLDEF(R_hashedgelist, 10),
   CALLDEF(R_write_output_clusters, 5),
   CALLDEF(test_writing, 0),
   CALLDEF(test_outputs, 2),

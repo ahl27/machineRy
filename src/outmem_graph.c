@@ -642,9 +642,9 @@ void cluster_file(const char* mastertab_fname, const char* clust_fname,
 
 		fclose(cur_q);
 		fclose(next_q);
-		if(v) Rprintf("Clustering: %c (%.0f%%)\r", progress[i%8], ((double)(i+1) / max_iterations)*100);
+		if(v) Rprintf("Clustering: %.0f%% complete %c\r", ((double)(i+1) / max_iterations)*100, progress[i%8]);
 	}
-	if(v) Rprintf("Clustering: 100%%    \n");
+	if(v) Rprintf("Clustering: 100%% complete.   \n");
 	fclose(masterfile);
 
 	reformat_clusters(clusterfile, num_v);
@@ -704,7 +704,7 @@ void verify_clusters(const char *filename, l_uint num_v){
 
 
 
-SEXP R_hashedgelist(SEXP FILENAME, SEXP TABNAME, SEXP TEMPTABNAME, SEXP QFILES, SEXP OUTDIR,
+SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNAME, SEXP QFILES, SEXP OUTDIR,
 										SEXP SEPS, SEXP CTR, SEXP ITER, SEXP VERBOSE){
 	/*
 	 * I always forget how to handle R strings so I'm going to record it here
@@ -726,18 +726,23 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP TABNAME, SEXP TEMPTABNAME, SEXP QFILES, 
 	 */
 
 	const char* dir = CHAR(STRING_ELT(OUTDIR, 0));
-	const char* edgefile = CHAR(STRING_ELT(FILENAME, 0));
+	//const char* edgefile = CHAR(STRING_ELT(FILENAME, 0));
+	const char* edgefile;
 	const char* tabfile = CHAR(STRING_ELT(TABNAME, 0));
 	const char* temptabfile = CHAR(STRING_ELT(TEMPTABNAME, 0));
 	const char* seps = CHAR(STRING_ELT(SEPS, 0));
 	const char* qfile1 = CHAR(STRING_ELT(QFILES, 0));
 	const char* qfile2 = CHAR(STRING_ELT(QFILES, 1));
+	const int num_edgefiles = INTEGER(NUM_EFILES)[0];
 	const int num_iter = INTEGER(ITER)[0];
 	const int verbose = LOGICAL(VERBOSE)[0];
-	l_uint ctr = (l_uint)(REAL(CTR)[0]), num_v;
+	l_uint num_v = (l_uint)(REAL(CTR)[0]);
 
 	// first, index all vertex names and record how many edges each has
- 	num_v = hash_file_vnames(edgefile, dir, temptabfile, seps[0], seps[1], ctr, verbose);
+	for(int i=0; i<num_edgefiles; i++){
+		edgefile = CHAR(STRING_ELT(FILENAME, i));
+		num_v += hash_file_vnames(edgefile, dir, temptabfile, seps[0], seps[1], num_v, verbose);
+	}
  	// TODO: support multiple files.
  	// 			 This is super easy, just accept CHAR input with length > 1 and call hash_file_vnames for each
  	// 			 as long as you update ctr on each run it'll work fine, it's already set up to work like this
@@ -750,7 +755,10 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP TABNAME, SEXP TEMPTABNAME, SEXP QFILES, 
 
 
  	// then, we'll create the CSR compression of all our edges
- 	csr_compress_edgelist(edgefile, dir, temptabfile, tabfile, seps[0], seps[1], num_v, verbose);
+ 	for(int i=0; i<num_edgefiles; i++){
+ 		edgefile = CHAR(STRING_ELT(FILENAME, i));
+ 		csr_compress_edgelist(edgefile, dir, temptabfile, tabfile, seps[0], seps[1], num_v, verbose);
+ 	}
 
  	// temptabfile now becomes our clustering file
  	cluster_file(tabfile, temptabfile, qfile1, qfile2, num_v, num_iter, verbose);
