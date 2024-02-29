@@ -499,14 +499,103 @@ void reformat_clusters(FILE *clusterfile, l_uint num_v){
 	return;
 }
 
-void cluster_file(const char* mastertab_fname, const char* clust_fname, l_uint num_v){
+void add_to_queue(l_uint clust, l_uint ind, l_uint n_node, FILE *clust_f, FILE *master_f, FILE *q_f){
+	l_uint start, end, tmp_ind, tmp_cl, nedge;
+	l_uint buf[MAX_EDGES_EXACT];
+	double dummy;
+	int ctr = 0, found;
+
+	fseek(master_f, ind*L_SIZE, SEEK_SET);
+	fread(&start, L_SIZE, 1, master_f);
+	fread(&end, L_SIZE, 1, master_f);
+	fseek(master_f, (n_node+1)*L_SIZE, SEEK_SET);
+	fseek(master_f, start*(L_SIZE+sizeof(double)), SEEK_CUR);
+
+	nedge = end - start;
+	for(l_uint i=0; i<nedge; i++){
+		fread(&tmp_ind, L_SIZE, 1, master_f);
+		fread(&dummy, sizeof(double), 1, master_f);
+		fseek(clust_f, L_SIZE*tmp_ind, SEEK_SET);
+		fread(&tmp_cl, L_SIZE, 1, clust_f);
+
+		if(tmp_cl && tmp_cl == clust) continue;
+		tmp_ind++;
+		found = 0;
+		for(int j=0; j<ctr; j++){
+			if(buf[j] == tmp_ind){
+				found = 1;
+				break;
+			}
+		}
+		if(!found){
+			buf[ctr++] = tmp_ind;
+			if(ctr == MAX_EDGES_EXACT) break;
+		}
+	}
+
+	// iterate over queue file, adding numbers if not already there
+	rewind(q_f);
+	while(fread(&tmp_ind, L_SIZE, 1, q_f)){
+		for(int j=0; j<ctr; j++){
+			if(buf[j] && (tmp_ind+1 == buf[j])){
+				buf[j] = 0;
+				break;
+			}
+		}
+	}
+
+	// this is just in case, it adds a little runtime but it's safer to guard fread errors
+	fseek(q_f, 0, SEEK_END);
+	for(int j=0; j<ctr; j++){
+		if(buf[j]){
+			buf[j]--;
+			fwrite(&buf[j], L_SIZE, 1, q_f);
+		}
+	}
+
+	return;
+}
+
+l_uint get_qsize(FILE *q){
+	l_uint scratch, ctr=0;
+	while(fread(&scratch, L_SIZE, 1, q)) ctr++;
+	rewind(q);
+	return ctr;
+}
+
+void cluster_file(const char* mastertab_fname, const char* clust_fname,
+									const char *qfile_f1, const char *qfile_f2,
+									l_uint num_v, int max_iterations){
 	// temporary implementation for now, will adjust later
 	// main runner function to cluster nodes
 	FILE *masterfile = fopen(mastertab_fname, "rb");
 	FILE *clusterfile = fopen(clust_fname, "rb+");
+	FILE *cur_q, *next_q;
+	const char* queues[] = {qfile_f1, qfile_f2};
 
-	for(l_uint i=0; i<num_v; i++){
-		update_node_cluster(i, num_v+1, masterfile, clusterfile);
+	l_uint cluster_res, qsize, tmp_ind;
+	// first pass will randomly go over all nodes and populate a query thing
+	// for first try, we'll just go linear and then add in the random later
+	for(int i=0; i<max_iterations; i++){
+		cur_q = fopen(queues[(i+1)%2], "rb+");
+		next_q = fopen(queues[i%2], "wb+");
+		if(i == 0){
+			for(l_uint i=0; i<num_v; i++){
+				cluster_res = update_node_cluster(i, num_v+1, masterfile, clusterfile);
+				add_to_queue(cluster_res, i, num_v, clusterfile, masterfile, next_q);
+			}
+		} else {
+			qsize = get_qsize(cur_q);
+			Rprintf("Queue size: %lu\n", qsize);
+			if(qsize == 0) break;
+
+			while(fread(&tmp_ind, L_SIZE, 1, cur_q)){
+				cluster_res = update_node_cluster(tmp_ind, num_v+1, masterfile, clusterfile);
+				add_to_queue(cluster_res, tmp_ind, num_v, clusterfile, masterfile, next_q);
+			}
+		}
+		fclose(cur_q);
+		fclose(next_q);
 	}
 
 	reformat_clusters(clusterfile, num_v);
@@ -564,7 +653,7 @@ void verify_clusters(const char *filename, l_uint num_v){
 
 
 
-SEXP R_hashedgelist(SEXP FILENAME, SEXP TABNAME, SEXP TEMPTABNAME, SEXP OUTDIR, SEXP SEPS, SEXP CTR){
+SEXP R_hashedgelist(SEXP FILENAME, SEXP TABNAME, SEXP TEMPTABNAME, SEXP QFILES, SEXP OUTDIR, SEXP SEPS, SEXP CTR, SEXP ITER){
 	/*
 	 * I always forget how to handle R strings so I'm going to record it here
 	 * R character vectors are STRSXPs, which is the same as a list (VECSXP)
@@ -578,6 +667,9 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP TABNAME, SEXP TEMPTABNAME, SEXP OUTDIR, 
 	const char* tabfile = CHAR(STRING_ELT(TABNAME, 0));
 	const char* temptabfile = CHAR(STRING_ELT(TEMPTABNAME, 0));
 	const char* seps = CHAR(STRING_ELT(SEPS, 0));
+	const char* qfile1 = CHAR(STRING_ELT(QFILES, 0));
+	const char* qfile2 = CHAR(STRING_ELT(QFILES, 1));
+	const int num_iter = INTEGER(ITER)[0];
 	l_uint ctr = (l_uint)(REAL(CTR)[0]), num_v;
 
 	// first, index all vertex names and record how many edges each has
@@ -601,7 +693,7 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP TABNAME, SEXP TEMPTABNAME, SEXP OUTDIR, 
  	//verify_edgelist(tabfile, num_v);
 
  	Rprintf("Clustering nodes...\n");
- 	cluster_file(tabfile, temptabfile, num_v);
+ 	cluster_file(tabfile, temptabfile, qfile1, qfile2, num_v, num_iter);
  	verify_clusters(temptabfile, num_v);
 
 	SEXP RETVAL = PROTECT(allocVector(REALSXP, 1));
