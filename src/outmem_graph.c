@@ -52,6 +52,58 @@
 #define MAX_NODE_NAME_SIZE 256
 
 const char DELIM = 23; // 23 = end of transmission block, not really used for anything nowadays
+const int L_SIZE = sizeof(l_uint);
+const l_uint MAX_EDGES_EXACT = 5000; // this is a soft cap -- if above this, we sample edges probabalistically
+
+typedef struct ll {
+	l_uint id;
+	double w;
+	struct ll* next;
+} ll;
+
+ll* insert_ll(ll* head, l_uint id, double w){
+	ll *tmp = head;
+	if(!tmp){
+		tmp = malloc(sizeof(ll));
+		tmp->id = id;
+		tmp->w = w;
+		tmp->next=NULL;
+		return(tmp);
+	}
+	while(tmp->id != id && tmp->next) tmp = tmp->next;
+	if(tmp->id!=id){
+		tmp->next = malloc(sizeof(ll));
+		tmp = tmp->next;
+		tmp->id = id;
+		tmp->w = w;
+		tmp->next = NULL;
+	} else {
+		tmp->w += w;
+	}
+
+	return head;
+}
+
+l_uint indexed_insert(ll *head, l_uint id){
+	// head is always just going to be dummy start pos
+	ll* tmp = head;
+	l_uint ctr = 0;
+	while(tmp->next && tmp->next->id != id){
+		tmp = tmp->next;
+		ctr++;
+	}
+
+	// two scenarios: 1) tmp->next is NULL, didn't find; 2) tmp->next is the id
+	if(!tmp->next){
+		tmp->next = malloc(sizeof(ll));
+		tmp = tmp->next;
+		tmp->id = id;
+		tmp->next = NULL;
+	}
+
+	return ctr+1;
+}
+
 
 void errorclose_file(FILE *f1, FILE *f2, const char* message){
 	fclose(f1);
@@ -149,13 +201,18 @@ l_uint rw_vertname(const char *vname, const char *dir, l_uint ctr){
 	c = DELIM;
 	fwrite(vname, sizeof(char), strlen(vname), f);
 	fwrite(&c, sizeof(char), 1, f);
-	fwrite(&ctr, sizeof(l_uint), 1, f);
+	fwrite(&ctr, L_SIZE, 1, f);
 	fclose(f);
 
 	return ctr+1;
 }
 
 l_uint hash_file_vnames(const char* fname, const char* dname, const char *ftable, const char sep, const char line_sep, l_uint ctr){
+	/*
+	 * fname: .tsv list of edges
+	 * dname: directory of hash codes
+	 * ftable: output counts file, should be L_SIZE*num_v bytes
+	 */
 	FILE *f = fopen(fname, "rb");
 	FILE *tab = fopen(ftable, "wb+");
 	char vname[MAX_NODE_NAME_SIZE];
@@ -187,12 +244,12 @@ l_uint hash_file_vnames(const char* fname, const char* dname, const char *ftable
 				num_edges = 1;
 				cur_ctr = found_vert;
 			} else {
-				fseek(tab, (found_vert-1)*sizeof(l_uint), SEEK_SET);
-				fread(&num_edges, sizeof(l_uint), 1, tab);
+				fseek(tab, (found_vert-1)*L_SIZE, SEEK_SET);
+				fread(&num_edges, L_SIZE, 1, tab);
 				num_edges++;
-				fseek(tab, -1*sizeof(l_uint), SEEK_CUR);
+				fseek(tab, -1*L_SIZE, SEEK_CUR);
 			}
-			fwrite(&num_edges, sizeof(l_uint), 1, tab);
+			fwrite(&num_edges, L_SIZE, 1, tab);
 		}
 
 		while(c != line_sep && c != EOF) c = getc(f);
@@ -215,7 +272,6 @@ int read_edge_to_table(FILE *edgefile, FILE *mastertab, FILE *countstab, const c
 	uint ctr=0;
 	l_uint indices[2], offset[2], locs[2];
 	double weight;
-	const uint l_size = sizeof(l_uint);
 
 	// index both the names
 	for(int i=0; i<2; i++){
@@ -233,15 +289,15 @@ int read_edge_to_table(FILE *edgefile, FILE *mastertab, FILE *countstab, const c
 		indices[i] = rw_vertname(tmp, hashdir, 0)-1;
 
 		// get offset for location we'll write to in the counts file
-		fseek(countstab, (indices[i])*l_size, SEEK_SET);
-		fread(&offset[i], l_size, 1, countstab);
+		fseek(countstab, (indices[i])*L_SIZE, SEEK_SET);
+		fread(&offset[i], L_SIZE, 1, countstab);
 		offset[i]--;
-		fseek(countstab, indices[i]*l_size, SEEK_SET);
-		fwrite(&offset[i], l_size, 1, countstab);
+		fseek(countstab, -1*L_SIZE, SEEK_CUR);
+		fwrite(&offset[i], L_SIZE, 1, countstab);
 
 		// get start location in table file we'll write to
-		fseek(mastertab, (indices[i])*l_size, SEEK_SET);
-		fread(&locs[i], l_size, 1, mastertab);
+		fseek(mastertab, (indices[i])*L_SIZE, SEEK_SET);
+		fread(&locs[i], L_SIZE, 1, mastertab);
 	}
 
 	// read in the weights
@@ -256,9 +312,9 @@ int read_edge_to_table(FILE *edgefile, FILE *mastertab, FILE *countstab, const c
 
 	// write to file
 	for(int i=0; i<2; i++){
-		fseek(mastertab, (num_v+1)*l_size, SEEK_SET);
+		fseek(mastertab, (num_v+1)*L_SIZE, SEEK_SET);
 		fseek(mastertab, (locs[i]+offset[i])*entrysize, SEEK_CUR);
-		fwrite(&indices[(i+1)%2], l_size, 1, mastertab);
+		fwrite(&indices[(i+1)%2], L_SIZE, 1, mastertab);
 		fwrite(&weight, sizeof(double), 1, mastertab);
 	}
 
@@ -270,7 +326,7 @@ void reformat_counts(const char* curcounts, const char* mastertable, l_uint n_ve
 	 * Creates a new table with cumulative counts
 	 * leaves the old table unchanged, this will act as a temporary counts file later
 	 */
-	const uint l_size = sizeof(l_uint);
+	const uint l_size = L_SIZE;
 	l_uint cumul_total = 0, curcount;
 	FILE *tmptab = fopen(curcounts, "rb");
 	FILE *mtab = fopen(mastertable, "wb+");
@@ -295,7 +351,7 @@ void csr_compress_edgelist(const char* edgefile, const char* dname, const char* 
 	 * This should be called after we've already read in all our files
 	 * critically, ensure we're rewritten our ftable file such that it is cumulative counts and not vertex counts
 	 */
-	const uint entry_size = sizeof(l_uint) + sizeof(double);
+	const uint entry_size = L_SIZE + sizeof(double);
 	FILE *mastertable, *tmptable, *edgelist;
 	mastertable = fopen(ftable, "rb+");
 	if(!mastertable){
@@ -323,11 +379,148 @@ void csr_compress_edgelist(const char* edgefile, const char* dname, const char* 
 	return;
 }
 
+l_uint update_node_cluster(l_uint ind, l_uint offset, FILE *mastertab, FILE *clusterings){
+	/*
+	 * Determine number of edges using the table file (next - cur)
+	 * If number of edges too large, use some sort of hash to bin edges, then rerun with less
+	 * Inputs:
+	 * 	- 	      ind: 0-indexed vertex id
+	 * 	-      offset: location where edges begin in mastertab
+	 *	-   mastertab: file pointer to CSR-compressed graph
+	 *	- clusterings: file of current cluster numbers (0=unassigned)
+	 */
+
+	l_uint start, end, num_edges, tmp_cl, tmp_id, zeromaxid=ind+1;
+	double tmp_w, acceptance_prob, zeromax=0;
+
+	// move to information for the vertex and read in number of edges
+	fseek(mastertab, L_SIZE*ind, SEEK_SET);
+	fread(&start, L_SIZE, 1, mastertab);
+	fread(&end, L_SIZE, 1, mastertab);
+
+
+	// if we're above the max edges, subsample the edges we read
+	num_edges = end - start;
+	// if it has no edges we can't do anything
+	if(num_edges == 0) return ind+1;
+
+	acceptance_prob = fmin((double)MAX_EDGES_EXACT / num_edges, 1.0);
+	ll *searchpath = NULL;
+	GetRNGstate();
+	fseek(mastertab, L_SIZE*offset, SEEK_SET);
+	fseek(mastertab, (L_SIZE+sizeof(double))*start, SEEK_CUR);
+	for(int i=0; i<num_edges; i++){
+		// skip with probability
+		if(unif_rand() > acceptance_prob){
+			fseek(mastertab, L_SIZE+sizeof(double), SEEK_CUR);
+			continue;
+		}
+
+		// read in neighbor and weight
+		fread(&tmp_id, L_SIZE, 1, mastertab);
+		fread(&tmp_w, sizeof(double), 1, mastertab);
+
+		// get which cluster it belongs to
+		fseek(clusterings, L_SIZE*tmp_id, SEEK_SET);
+		fread(&tmp_cl, L_SIZE, 1, clusterings);
+
+		/*
+		 * this solves a special edge case where uninitialized nodes with a self-loop
+		 * can be counted incorrectly if their neighbors have already been assigned to
+		 * their node. Thus, if it's a self loop and the cluster is uninitialized,
+		 * set it to its own cluster (what it would be initialized to)
+		 */
+		if(tmp_id == ind && tmp_cl == 0)
+			tmp_cl = ind+1;
+
+		// store value
+		if(tmp_cl){
+			searchpath = insert_ll(searchpath, tmp_cl, tmp_w);
+		} else if(tmp_w > zeromax) {
+			zeromax = tmp_w;
+			zeromaxid = tmp_id+1; // +1 because vertices 0-indexed and clusters 1-indexed
+		}
+	}
+
+	// now we've read in all the edges, find the new community
+	// (and free along the way)
+	// max weight and cluster will be stored in tmp_w and tmp_cl (resp.)
+	ll *tmp_ll = searchpath;
+	tmp_w = -1;
+	while(tmp_ll){
+		searchpath = tmp_ll;
+		tmp_ll = tmp_ll->next;
+
+		if(searchpath->w > tmp_w || (searchpath->w == tmp_w && unif_rand() < 0.5) ){
+			// ties are broken randomly
+			tmp_w = searchpath->w;
+			tmp_cl = searchpath->id;
+		}
+		free(searchpath);
+	}
+	PutRNGstate();
+	if(zeromax > tmp_w) tmp_cl = zeromaxid;
+
+	/*
+	 * now we have the cluster to choose stored in tmp_cl
+	 * Edge cases:
+	 * - crazy chance results in every edge being skipped
+	 *		-> since zeromax=0 and zeromaxid=id+1 at start, we just cluster it with itself and continue
+	 * - all clusters are initialized, searchpath ends up NULL
+	 * 		-> we won't free a NULL, and since zeromax > -1 we'll set it to the strongest uninitialized connection
+	 */
+
+	// last step is to write it to the cluster file
+	fseek(clusterings, L_SIZE*ind, SEEK_SET);
+	fwrite(&tmp_cl, L_SIZE, 1, clusterings);
+
+	return tmp_cl;
+}
+
+void reformat_clusters(FILE *clusterfile, l_uint num_v){
+	l_uint tmp_cind;
+	ll *head = malloc(sizeof(ll));
+	head->next=NULL; // other values can just be garbage
+
+	rewind(clusterfile);
+	for(l_uint i=0; i<num_v; i++){
+		fread(&tmp_cind, L_SIZE, 1, clusterfile);
+		tmp_cind = indexed_insert(head, tmp_cind);
+		fseek(clusterfile, -1*L_SIZE, SEEK_CUR);
+		fwrite(&tmp_cind, L_SIZE, 1, clusterfile);
+	}
+
+	ll *tmp = head;
+	while(tmp){
+		head = tmp;
+		tmp = tmp->next;
+		free(head);
+	}
+	return;
+}
+
+void cluster_file(const char* mastertab_fname, const char* clust_fname, l_uint num_v){
+	// temporary implementation for now, will adjust later
+	// main runner function to cluster nodes
+	FILE *masterfile = fopen(mastertab_fname, "rb");
+	FILE *clusterfile = fopen(clust_fname, "rb+");
+
+	for(l_uint i=0; i<num_v; i++){
+		update_node_cluster(i, num_v+1, masterfile, clusterfile);
+	}
+
+	reformat_clusters(clusterfile, num_v);
+
+	fclose(masterfile);
+	fclose(clusterfile);
+	return;
+}
+
 void verify_filecontents(const char *filename, l_uint num_v){
 	FILE *f = fopen(filename, "rb");
 	l_uint tmp;
 	for(l_uint i=0; i<num_v; i++){
-		fread(&tmp, sizeof(l_uint), 1, f);
+		fread(&tmp, L_SIZE, 1, f);
 		Rprintf("%lu ", tmp);
 		if(i % 20 == 19) Rprintf("\n");
 	}
@@ -341,14 +534,13 @@ void verify_edgelist(const char *filename, l_uint num_v){
 	l_uint tmp, all_indices[num_v+1];
 	int curpos = 0, curvert=0;
 	double dtmp;
-	fread(all_indices, sizeof(l_uint), (num_v+1), f);
-	//fseek(f, sizeof(l_uint)*(num_v+1), SEEK_SET);
+	fread(all_indices, L_SIZE, (num_v+1), f);
 	for(l_uint i=0; i<all_indices[num_v]; i++){
 		if(curpos == all_indices[curvert]){
 			Rprintf("\n%lu: ", curvert++);
 		}
 		curpos++;
-		fread(&tmp, sizeof(l_uint), 1, f);
+		fread(&tmp, L_SIZE, 1, f);
 		fread(&dtmp, sizeof(double), 1, f);
 		Rprintf("%lu (%0.2f); ", tmp, dtmp);
 	}
@@ -356,6 +548,21 @@ void verify_edgelist(const char *filename, l_uint num_v){
 	fclose(f);
 	return;
 }
+
+void verify_clusters(const char *filename, l_uint num_v){
+	// this is pretty slow, but the point is more just to demonstrate that it works
+	// report by cluster once we implement re-indexing
+	FILE *f = fopen(filename, "rb");
+	l_uint tmp;
+	for(l_uint i=0; i<num_v; i++){
+		fread(&tmp, L_SIZE, 1, f);
+		Rprintf("%lu: %lu\n", i, tmp);
+	}
+	fclose(f);
+	return;
+}
+
+
 
 SEXP R_hashedgelist(SEXP FILENAME, SEXP TABNAME, SEXP TEMPTABNAME, SEXP OUTDIR, SEXP SEPS, SEXP CTR){
 	/*
@@ -390,13 +597,12 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP TABNAME, SEXP TEMPTABNAME, SEXP OUTDIR, 
  	csr_compress_edgelist(edgefile, dir, temptabfile, tabfile, seps[0], seps[1], num_v);
  	Rprintf("Edges read in!\n");
 
- 	// temptabfile isn't needed at this point
- 	//remove(temptabfile);
+ 	// temptabfile now becomes our clustering file
+ 	//verify_edgelist(tabfile, num_v);
 
-
- 	// if all went right, we should now have our complete file stored in the right format
- 	verify_edgelist(tabfile, num_v);
- 	//remove(tabfile);
+ 	Rprintf("Clustering nodes...\n");
+ 	cluster_file(tabfile, temptabfile, num_v);
+ 	verify_clusters(temptabfile, num_v);
 
 	SEXP RETVAL = PROTECT(allocVector(REALSXP, 1));
 	REAL(RETVAL)[0] = (double) num_v;
@@ -436,7 +642,7 @@ SEXP test_outputs(SEXP TABFILE, SEXP NVERT){
 	l_uint tmp;
 	FILE *f = fopen(tabfile, "rb");
 	for(int i=0; i<nvert; i++){
-		fread(&tmp, sizeof(l_uint), 1, f);
+		fread(&tmp, L_SIZE, 1, f);
 		d[i] = (double)tmp;
 	}
 
