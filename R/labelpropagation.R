@@ -112,14 +112,26 @@ deparse_communities <- function(commPred){
   return(res)
 }
 
-fastlabel_oom <- function(edgelistfiles, outfile=tempfile(), iterations=1L,
+fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
+                          mode=c("undirected", "directed"), iterations=1L,
                           returnTable=FALSE, verbose=TRUE,
                           sep='\t', linesep='\n',
                           tempfiledir=tempdir(), cleanup_files=TRUE){
+  if(!is.numeric(iterations)){
+    stop("iterations must be a positive integer or numeric.")
+  } else {
+    iterations <- as.integer(iterations)
+  }
+  if(is.na(iterations) || is.null(iterations) || iterations < 1){
+    warning("Invalid value of iterations, defaulting to 1.")
+    iterations <- 1L
+  }
   counter_cluster_binary <- tempfile(tmpdir=tempfiledir)
   csr_table_binary <- tempfile(tmpdir=tempfiledir)
   qfiles <- c(tempfile(tmpdir=tempfiledir), tempfile(tmpdir=tempfiledir))
   hashdir <- file.path(tempfiledir, "OOMhashes")
+  mode <- match.arg(mode)
+  is_undirected <- mode == "undirected"
   if(dir.exists(hashdir)){
     for(f in list.files(hashdir, full.names=TRUE))
       file.remove(f)
@@ -141,12 +153,12 @@ fastlabel_oom <- function(edgelistfiles, outfile=tempfile(), iterations=1L,
   if(!all(file.exists(edgelistfiles))) stop("edgelist file does not exist")
   # R_hashedgelist(tsv, csr, clusters, queues, hashdir, seps, 1, iter, verbose)
   .Call("R_hashedgelist", edgelistfiles, length(edgelistfiles), csr_table_binary,
-        counter_cluster_binary, qfiles, hashdir, seps, ctr, iterations, verbose)
+        counter_cluster_binary, qfiles, hashdir, seps, ctr, iterations, verbose, is_undirected)
   all_hashfiles <- list.files(hashdir, full.names = TRUE)
 
   # R_write_output_clusters(clusters, hashes, length(hashes), out_tsvpath, seps)
   .Call("R_write_output_clusters", counter_cluster_binary, all_hashfiles,
-        length(all_hashfiles), outfile, seps)
+        length(all_hashfiles), outfile, "\t\n")
 
   if(cleanup_files){
     for(f in c(csr_table_binary, counter_cluster_binary, qfiles))
@@ -156,7 +168,7 @@ fastlabel_oom <- function(edgelistfiles, outfile=tempfile(), iterations=1L,
     file.remove(hashdir)
   }
   if(returnTable){
-    tab <- read.table(outfile)
+    tab <- read.table(outfile, sep="\t")
     colnames(tab) <- c("Vertex", "Cluster")
     if(file.exists(outfile)) file.remove(outfile)
     return(tab)

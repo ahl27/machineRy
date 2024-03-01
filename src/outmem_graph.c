@@ -1,33 +1,29 @@
 /*
- * Storing graphs in CSR format
- * Weighted graph will have associated files:
- * 	1. Index: n'th entry contains the start location of information for vertex n
- *						Length n+1, last entry is the end of the file (fixed width int)
- *	2. Connections: Contains vertices the n'th vertex is connected to.
- *									Indexed by `Index` file. (fixed width int)
- *	3. Weights: Same as `Connections`, but weights (double)
+ * Out of memory clustering with fast label propagation
+ * Author: Aidan Lakshman
  *
- * Example:
- *		graph: {0,1,2,3}
- *    edges: {(0,1,0.1), (0,2,0.2), (1,3,0.3), (2,3,0.4)}
+ * This set of functions creates 5 files and a directory (using dummy names):
+ *	-   OOMhashes: (directory) mapping between hash value and vertex name, along with index assignment
+ * 	-  counts.bin: binary file containing edge counts for each vertex, and later cluster assignments
+ * 	-  queue1.bin: out of memory queue for traversing nodes
+ *  -  queue2.bin: second queue to improve r/w over jumping around queue1
+ *  -     csr.bin: csr-compressed graph structure. Contains n+1 uint64_t values corresponding to vertex
+ *		 						 indices, where the k'th value denotes the start position in the file for vertex k.
+ *		 						 After the indices follow edge information of the form `d1 w1 d2 w2 d3 w3...`, where
+ *		 						 each `d` corresponds to the destination of that edge, and each `w` the weight of
+ *		 						 that edge. Indices index into this, e.g., if the first two values are 0 100 then the
+ *		 						 outgoing edges from the first vertex are the first 100 edge entries (0-99).
+ *  - outfile.tsv: .tsv file returned to R, contains two tab-separated columns (vertex name, cluster)
  *
- * 				  Index:  0 2 4 6 8
- *		Connections:  1   2   0   3   0   3   1   2
- *        Weights: 0.1 0.2 0.1 0.3 0.2 0.4 0.3 0.4
- *
- * Algorithm:
- *	1. count number of edges for each node
- *		- Probably can't be done in-memory
- *		- Initialize two files (conn, conn_tmp) to all zeros, r/w to first increment over time
- *	2. loop over edges again, writing neighbors and weights
- *		- for each edge, write info to file[conn[n]+conn_tmp]
- *		- increment conn_tmp at both vertices
- *
- * Plan for data:
- * 	- make each function / execution pipeline work on a single file
- *  - out of memory means that we don't have to process everything at once
- *	- for edgelist files in a directory, call C for each from R
- *	- do it again for other files
+ * Additional notes and TODOs:
+ *	- At some point it's probably worth refactoring all file accesses into some kind of struct w/ accessors
+ *  	-> something like a virtual array object that's actually r/w to disk, could be useful in future
+ *		-> this implementation should use mmap (and Windows equivalent when necessary) to improve random r/w
+ *  - Error checking needs to be improved
+ *		-> no checks to ensure the edgelists are formatted the way the user claims
+ *  - No calls to R_CheckUserInterrupt(), likely blocking for a while on large graphs
+ *  - Unweighted graphs aren't supported. Unweighted graphs could save a ton of space (2x less in csr file).
+ *		-> this would be a fairly big rewrite
  */
 
 #include "machineRy.h"
@@ -208,7 +204,8 @@ l_uint rw_vertname(const char *vname, const char *dir, l_uint ctr){
 	return ctr+1;
 }
 
-l_uint hash_file_vnames(const char* fname, const char* dname, const char *ftable, const char sep, const char line_sep, l_uint ctr, int v){
+l_uint hash_file_vnames(const char* fname, const char* dname, const char *ftable,
+	const char sep, const char line_sep, l_uint ctr, int v, int is_undirected){
 	/*
 	 * fname: .tsv list of edges
 	 * dname: directory of hash codes
@@ -221,6 +218,7 @@ l_uint hash_file_vnames(const char* fname, const char* dname, const char *ftable
 	char c = getc(f);
 	l_uint found_vert = 0, cur_ctr = ctr, num_edges = 0;
 	l_uint print_counter = 0;
+	int undiroffset = is_undirected ? 0 : 1;
 
 	if(v) Rprintf("Reading file %s...\n", fname);
 
@@ -242,12 +240,16 @@ l_uint hash_file_vnames(const char* fname, const char* dname, const char *ftable
 
 			vname[cur_pos] = '\0';
 			c = getc(f);
+
+
 			found_vert = rw_vertname(vname, dname, cur_ctr);
+			// if directed, only increment the outgoing edge
 			if(found_vert > cur_ctr){
 				fseek(tab, 0, SEEK_END);
-				num_edges = 1;
+				num_edges = 1 - undiroffset;
 				cur_ctr = found_vert;
 			} else {
+				if(!is_undirected && iter == 1) continue;
 				fseek(tab, (found_vert-1)*L_SIZE, SEEK_SET);
 				fread(&num_edges, L_SIZE, 1, tab);
 				num_edges++;
@@ -261,18 +263,18 @@ l_uint hash_file_vnames(const char* fname, const char* dname, const char *ftable
 		if(v){
 			print_counter++;
 			if(print_counter % PRINT_COUNTER_MOD == 0){
-				Rprintf("\t%lu lines read\r", print_counter);
+				Rprintf("\t%llu lines read\r", print_counter);
 			}
 		}
 	}
-	if(v) Rprintf("\n\t%lu total nodes.\n", cur_ctr-1);
+	if(v) Rprintf("\t%llu lines read\n\t%llu total nodes.\n", print_counter, cur_ctr-1);
 	fclose(f);
 	fclose(tab);
 	return cur_ctr-1;
 }
 
 int read_edge_to_table(FILE *edgefile, FILE *mastertab, FILE *countstab, const char* hashdir,
-												const char sep, const char linesep, uint entrysize, l_uint num_v){
+												const char sep, const char linesep, uint entrysize, l_uint num_v, int is_undirected){
 	/*
 	 * function reads in a single edge
 	 * should assume that the edgefile pointer is already at the correct location
@@ -282,6 +284,7 @@ int read_edge_to_table(FILE *edgefile, FILE *mastertab, FILE *countstab, const c
 	uint ctr=0;
 	l_uint indices[2], offset[2], locs[2];
 	double weight;
+	int itermax = is_undirected ? 2 : 1;
 
 	// index both the names
 	for(int i=0; i<2; i++){
@@ -321,7 +324,8 @@ int read_edge_to_table(FILE *edgefile, FILE *mastertab, FILE *countstab, const c
 	weight = atof(tmp);
 
 	// write to file
-	for(int i=0; i<2; i++){
+	for(int i=0; i<itermax; i++){
+		// note if !is_undirected then we only write from->to direction
 		fseek(mastertab, (num_v+1)*L_SIZE, SEEK_SET);
 		fseek(mastertab, (locs[i]+offset[i])*entrysize, SEEK_CUR);
 		fwrite(&indices[(i+1)%2], L_SIZE, 1, mastertab);
@@ -356,7 +360,7 @@ void reformat_counts(const char* curcounts, const char* mastertable, l_uint n_ve
 }
 
 void csr_compress_edgelist(const char* edgefile, const char* dname, const char* curcountfile, const char* ftable,
-														const char sep, const char linesep, l_uint num_v, int v){
+														const char sep, const char linesep, l_uint num_v, int v, int is_undirected){
 	/*
 	 * This should be called after we've already read in all our files
 	 * critically, ensure we're rewritten our ftable file such that it is cumulative counts and not vertex counts
@@ -382,14 +386,14 @@ void csr_compress_edgelist(const char* edgefile, const char* dname, const char* 
 	if(v) Rprintf("Reading edges from file %s...\n", edgefile);
 
 	while(status){
-		status = read_edge_to_table(edgelist, mastertable, tmptable, dname, sep, linesep, entry_size, num_v);
+		status = read_edge_to_table(edgelist, mastertable, tmptable, dname, sep, linesep, entry_size, num_v, is_undirected);
 		if(v){
 			print_counter++;
 			if(print_counter % PRINT_COUNTER_MOD == 0)
-				Rprintf("\t%lu edges read\r", print_counter);
+				Rprintf("\t%llu edges read\r", print_counter);
 		}
 	}
-	if(v) Rprintf("\n");
+	if(v) Rprintf("\t%llu edges read\n", print_counter);
 
 	fclose(mastertable);
 	fclose(tmptable);
@@ -658,7 +662,7 @@ void cluster_file(const char* mastertab_fname, const char* clust_fname,
 
 
 SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNAME, SEXP QFILES, SEXP OUTDIR,
-										SEXP SEPS, SEXP CTR, SEXP ITER, SEXP VERBOSE){
+										SEXP SEPS, SEXP CTR, SEXP ITER, SEXP VERBOSE, SEXP IS_UNDIRECTED){
 	/*
 	 * I always forget how to handle R strings so I'm going to record it here
 	 * R character vectors are STRSXPs, which is the same as a list (VECSXP)
@@ -689,12 +693,13 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
 	const int num_edgefiles = INTEGER(NUM_EFILES)[0];
 	const int num_iter = INTEGER(ITER)[0];
 	const int verbose = LOGICAL(VERBOSE)[0];
+	const int is_undirected = LOGICAL(IS_UNDIRECTED)[0];
 	l_uint num_v = (l_uint)(REAL(CTR)[0]);
 
 	// first, index all vertex names and record how many edges each has
 	for(int i=0; i<num_edgefiles; i++){
 		edgefile = CHAR(STRING_ELT(FILENAME, i));
-		num_v += hash_file_vnames(edgefile, dir, temptabfile, seps[0], seps[1], num_v, verbose);
+		num_v += hash_file_vnames(edgefile, dir, temptabfile, seps[0], seps[1], num_v, verbose, is_undirected);
 	}
  	// TODO: support multiple files.
  	// 			 This is super easy, just accept CHAR input with length > 1 and call hash_file_vnames for each
@@ -710,7 +715,7 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
  	// then, we'll create the CSR compression of all our edges
  	for(int i=0; i<num_edgefiles; i++){
  		edgefile = CHAR(STRING_ELT(FILENAME, i));
- 		csr_compress_edgelist(edgefile, dir, temptabfile, tabfile, seps[0], seps[1], num_v, verbose);
+ 		csr_compress_edgelist(edgefile, dir, temptabfile, tabfile, seps[0], seps[1], num_v, verbose, is_undirected);
  	}
 
  	// temptabfile now becomes our clustering file
