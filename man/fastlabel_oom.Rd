@@ -75,7 +75,7 @@ Unweighted graphs are currently not directly supported. You can supply an unweig
 }
 
 \references{
-%% ~put references to the literature/web site here ~
+Traag, V.A., Subelj, L. Large network community detection by fast label propagation. \emph{Sci Rep} \bold{13}, 2701 (2023). https://doi.org/10.1038/s41598-023-29610-z
 }
 \author{
 Aidan Lakshman <AHL27@pitt.edu>

@@ -144,7 +144,7 @@ l_uint rw_vertname(const char *vname, const char *dir, l_uint ctr){
 	char found_name, c;
 
 	// build filename using the hash
-	sprintf(fname, "%s/%08x", dir, hash);
+	snprintf(fname, (strlen(dir) + 9)*sizeof(char), "%s/%08x", dir, hash);
 	FILE *f;
 	if(ctr){
 		// create file if it doesn't exist
@@ -774,7 +774,7 @@ SEXP R_write_output_clusters(SEXP CLUSTERFILE, SEXP HASHEDFILES, SEXP NUM_FILES,
 
 			fseek(fclusters, L_SIZE*(index-1), SEEK_SET);
 			fread(&clust, L_SIZE, 1, fclusters);
-			sprintf(write_buf, "%s%c%llu%c", buf, seps[0], clust, seps[1]);
+			snprintf(write_buf, (strlen(buf)+2)*sizeof(char)+L_SIZE, "%s%c%llu%c", buf, seps[0], clust, seps[1]);
 			fwrite(write_buf, sizeof(char), strlen(write_buf), outf);
 		}
 		fclose(f);
