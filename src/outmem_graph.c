@@ -24,6 +24,9 @@
  *  - No calls to R_CheckUserInterrupt(), likely blocking for a while on large graphs
  *  - Unweighted graphs aren't supported. Unweighted graphs could save a ton of space (2x less in csr file).
  *		-> this would be a fairly big rewrite
+ *  - Queues could be rewritten
+ *		-> could do what erik first did with "chasing pointers", probably inefficient given each file only permits one pointer
+ *		-> probably better to set up a third file with a single bit per vertex, use it to track in_queue or out_queue
  */
 
 #include "machineRy.h"
@@ -49,7 +52,7 @@
 
 const char DELIM = 23; // 23 = end of transmission block, not really used for anything nowadays
 const int L_SIZE = sizeof(l_uint);
-const l_uint MAX_EDGES_EXACT = 5000; // this is a soft cap -- if above this, we sample edges probabalistically
+const l_uint MAX_EDGES_EXACT = 20000; // this is a soft cap -- if above this, we sample edges probabalistically
 const int PRINT_COUNTER_MOD = 10;
 
 typedef struct ll {
@@ -113,7 +116,7 @@ uint hash_string_fnv(const char *str){
 	 * this is a Fowler-Noll-Vo hash function, it's fast and simple -- see wikipedia for constants
 	 * https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
 	 *
-	 * hashes to a 32-bit uint, so we can have up to 65,536 files in the folder
+	 * hashes to a 32-bit uint that we truncate to a 16-bit, so we can have up to 65,536 files in the folder
 	*/
 	const uint fnv_prime = 0x01000193;
 	uint hash = 0x811c9dc5;
@@ -128,6 +131,9 @@ uint hash_string_fnv(const char *str){
 			hash ^= tmp;
 		}
 	}
+
+	// XOR fold to 16 bits
+	hash = (hash & 0x0000FFFF) ^ ((hash & 0xFFFF0000) >> 16);
 
 	return hash;
 }
@@ -144,7 +150,7 @@ l_uint rw_vertname(const char *vname, const char *dir, l_uint ctr){
 	char found_name, c;
 
 	// build filename using the hash
-	snprintf(fname, (strlen(dir) + 9)*sizeof(char), "%s/%08x", dir, hash);
+	snprintf(fname, (strlen(dir) + 5)*sizeof(char), "%s/%04x", dir, hash);
 	FILE *f;
 	if(ctr){
 		// create file if it doesn't exist
@@ -522,7 +528,7 @@ void reformat_clusters(FILE *clusterfile, l_uint num_v){
 	return;
 }
 
-void add_to_queue(l_uint clust, l_uint ind, l_uint n_node, FILE *clust_f, FILE *master_f, FILE *q_f){
+void add_to_queue(l_uint clust, l_uint ind, l_uint n_node, FILE *clust_f, FILE *master_f, FILE *q_f, FILE *ctrq_f){
 	l_uint start, end, tmp_ind, tmp_cl, nedge;
 	l_uint buf[MAX_EDGES_EXACT];
 	double dummy;
@@ -558,6 +564,17 @@ void add_to_queue(l_uint clust, l_uint ind, l_uint n_node, FILE *clust_f, FILE *
 
 	// iterate over queue file, adding numbers if not already there
 	rewind(q_f);
+	for(int j=0; j<ctr; j++){
+		fseek(ctrq_f, sizeof(char)*buf[j], SEEK_SET);
+		found = getc(ctrq_f);
+		if(!found){
+			fseek(ctrq_f, -1*sizeof(char), SEEK_CUR);
+			putc(1, ctrq_f);
+		} else {
+			buf[j] = 0;
+		}
+	}
+	/*
 	while(fread(&tmp_ind, L_SIZE, 1, q_f)){
 		for(int j=0; j<ctr; j++){
 			if(buf[j] && (tmp_ind+1 == buf[j])){
@@ -566,7 +583,7 @@ void add_to_queue(l_uint clust, l_uint ind, l_uint n_node, FILE *clust_f, FILE *
 			}
 		}
 	}
-
+	*/
 	// this is just in case, it adds a little runtime but it's safer to guard fread errors
 	fseek(q_f, 0, SEEK_END);
 	for(int j=0; j<ctr; j++){
@@ -586,10 +603,11 @@ l_uint get_qsize(FILE *q){
 	return ctr;
 }
 
-void initialize_queue(FILE *q, l_uint maxv){
+void initialize_queue(FILE *q, l_uint maxv, FILE *ctr_file){
 	GetRNGstate();
 	l_uint j, tmp;
 	for(l_uint i=0; i<maxv; i++){
+		putc(1, ctr_file);
 		j = (l_uint) trunc(i * (unif_rand()));
 		if(j != i){
 			// guarding edge case where unif_rand() returns 1.0
@@ -615,22 +633,23 @@ void initialize_queue(FILE *q, l_uint maxv){
 }
 
 void cluster_file(const char* mastertab_fname, const char* clust_fname,
-									const char *qfile_f1, const char *qfile_f2,
+									const char *qfile_f1, const char *qfile_f2, const char *qfile_log,
 									l_uint num_v, int max_iterations, int v){
 	// temporary implementation for now, will adjust later
 	// main runner function to cluster nodes
 	FILE *masterfile = fopen(mastertab_fname, "rb");
 	FILE *clusterfile = fopen(clust_fname, "rb+");
-	FILE *cur_q, *next_q;
+	FILE *cur_q, *next_q, *ctr_q;
 	const char* queues[] = {qfile_f1, qfile_f2};
 	const char* progress = "\\|/-\\|/-";
 
+	ctr_q = fopen(qfile_log, "wb+");
 	l_uint cluster_res, qsize, tmp_ind;
 
-	// randomly initialize queue
+	// randomly initialize queue and ctr file
 	if(v) Rprintf("Clustering: |\r");
 	cur_q = fopen(queues[0], "wb+");
-	initialize_queue(cur_q, num_v);
+	initialize_queue(cur_q, num_v, ctr_q);
 	fclose(cur_q);
 
 	for(int i=0; i<max_iterations; i++){
@@ -640,8 +659,10 @@ void cluster_file(const char* mastertab_fname, const char* clust_fname,
 		if(qsize == 0) break;
 
 		while(fread(&tmp_ind, L_SIZE, 1, cur_q)){
+			fseek(ctr_q, sizeof(char)*tmp_ind, SEEK_SET);
+			putc(0, ctr_q);
 			cluster_res = update_node_cluster(tmp_ind, num_v+1, masterfile, clusterfile);
-			add_to_queue(cluster_res, tmp_ind, num_v, clusterfile, masterfile, next_q);
+			add_to_queue(cluster_res, tmp_ind, num_v, clusterfile, masterfile, next_q, ctr_q);
 		}
 
 		fclose(cur_q);
@@ -649,14 +670,14 @@ void cluster_file(const char* mastertab_fname, const char* clust_fname,
 		if(v) Rprintf("Clustering: %.0f%% complete %c\r", ((double)(i+1) / max_iterations)*100, progress[i%8]);
 	}
 	if(v) Rprintf("Clustering: 100%% complete.   \n");
+	fclose(ctr_q);
 	fclose(masterfile);
 
 	reformat_clusters(clusterfile, num_v);
-
 	fclose(clusterfile);
 	remove(queues[0]);
 	remove(queues[1]);
-
+	remove(qfile_log);
 	return;
 }
 
@@ -690,6 +711,7 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
 	const char* seps = CHAR(STRING_ELT(SEPS, 0));
 	const char* qfile1 = CHAR(STRING_ELT(QFILES, 0));
 	const char* qfile2 = CHAR(STRING_ELT(QFILES, 1));
+	const char* qfile3 = CHAR(STRING_ELT(QFILES, 2));
 	const int num_edgefiles = INTEGER(NUM_EFILES)[0];
 	const int num_iter = INTEGER(ITER)[0];
 	const int verbose = LOGICAL(VERBOSE)[0];
@@ -719,7 +741,7 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
  	}
 
  	// temptabfile now becomes our clustering file
- 	cluster_file(tabfile, temptabfile, qfile1, qfile2, num_v, num_iter, verbose);
+ 	cluster_file(tabfile, temptabfile, qfile1, qfile2, qfile3, num_v, num_iter, verbose);
 
 	SEXP RETVAL = PROTECT(allocVector(REALSXP, 1));
 	REAL(RETVAL)[0] = (double) num_v;

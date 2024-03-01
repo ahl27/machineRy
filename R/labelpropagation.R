@@ -128,7 +128,9 @@ fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
   }
   counter_cluster_binary <- tempfile(tmpdir=tempfiledir)
   csr_table_binary <- tempfile(tmpdir=tempfiledir)
-  qfiles <- c(tempfile(tmpdir=tempfiledir), tempfile(tmpdir=tempfiledir))
+  qfiles <- c(tempfile(tmpdir=tempfiledir),
+              tempfile(tmpdir=tempfiledir),
+              tempfile(tmpdir=tempfiledir))
   hashdir <- file.path(tempfiledir, "OOMhashes")
   mode <- match.arg(mode)
   is_undirected <- mode == "undirected"
@@ -145,6 +147,7 @@ fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
     cat("\tClusters: ", basename(counter_cluster_binary), "\n")
     cat("\tQueue 1: ", basename(qfiles[1]), "\n")
     cat("\tQueue 2: ", basename(qfiles[2]), "\n")
+    cat("\tQueue counter: ", basename(qfiles[3]), "\n")
     cat("\tHashes: ", basename(hashdir), "\n")
   }
 
