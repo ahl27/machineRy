@@ -10,7 +10,7 @@ Current implementations:
 - Random Forest: works for classification with numerical inputs, working on regression and categorical features
 - Fast Label Propagation: Works for `igraph` graphs. Consensus clustering across weight differentials 
 also working.
-- Out of memory clustering: Works for arbitrary sets of edgelists stored in `v1 v2 w` format. `tsv` format is preferred, but support for arbitrary encodings exists. Help file will be written soon.
+- Out of memory clustering: Works for arbitrary sets of edgelists stored in `v1 v2 w` format. `tsv` format is preferred, but support for arbitrary encodings exists. Seems to have a small bug that affects accuracy for large networks, I'll resolve it when I come back to this project. 
 
 # Current Stats:
 
