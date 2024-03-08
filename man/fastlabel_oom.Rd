@@ -9,7 +9,8 @@ Runs Fast Label Propagation using disk space for constant memory complexity.
 }
 \usage{
 fastlabel_oom(edgelistfiles, outfile=tempfile(),
-              mode=c("undirected", "directed"), iterations=1L,
+              mode=c("undirected", "directed"),
+              add_self_loops=FALSE, iterations=1L,
               returnTable=FALSE, verbose=TRUE,
               sep='\t', linesep='\n',
               tempfiledir=tempdir(), cleanup_files=TRUE)
@@ -26,6 +27,11 @@ File to write final clusters to. Optional, defaults to a temporary file.
 
 \item{mode}{
 Character string specifying whether edges should be interpreted as undirected (default) or directed. Can be "undirected", "directed", or an unambiguous abbreviation.
+}
+
+\item{add_self_loops}{
+Should self loops be added to each node? If \code{TRUE}, adds a self loop with
+weight 0.5 to each node.
 }
 
 \item{iterations}{

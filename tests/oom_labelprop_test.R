@@ -22,9 +22,11 @@ for(i in seq_len(num_files)){
 }
 
 library(igraph)
+self_loops <- FALSE
 set.seed(123L)
-res <- fastlabel_oom(all_efiles, outfile=tempfile(), iterations=1000L,
-                     returnTable=TRUE, verbose=FALSE,
+res <- fastlabel_oom(all_efiles, outfile=tempfile(), add_self_loops=self_loops,
+                     iterations=1000L,
+                     returnTable=TRUE, verbose=TRUE,
                      sep='\t', linesep='\n',
                      tempfiledir=tempdir(), cleanup_files=TRUE)
 
@@ -32,7 +34,8 @@ print(res)
 
 graph_edge <- read.delim(all_efiles, header = FALSE)
 set.seed(123L)
-res2 <- LP_igraph(graph_from_data_frame(graph_edge, directed=FALSE), max_iterations=1000L)
+res2 <- LP_igraph(graph_from_data_frame(graph_edge, directed=FALSE),
+                  add_self_loop = self_loops, max_iterations=1000L)
 
 
 

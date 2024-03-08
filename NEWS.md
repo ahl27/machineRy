@@ -2,6 +2,7 @@
 * Fixes bug where non-standard paths would crash OOMLP (e.g., `~`, `./`, `../`)
 * Fixes some internal bugs affecting accuracy of OOMLP; performance now matches regular LP
 * Adds more user interrupt checking for OOMLP
+* Adds option to append self loops to graphs for OOMLP
 
 # Version 0.3.0
 * Adds NEWS.md and some retroactive updates

@@ -112,7 +112,8 @@ deparse_communities <- function(commPred){
 }
 
 fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
-                          mode=c("undirected", "directed"), iterations=1L,
+                          mode=c("undirected", "directed"), add_self_loops=FALSE,
+                          iterations=1L,
                           returnTable=FALSE, verbose=TRUE,
                           sep='\t', linesep='\n',
                           tempfiledir=tempdir(), cleanup_files=TRUE){
@@ -156,7 +157,8 @@ fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
   edgelistfiles <- normalizePath(edgelistfiles, mustWork=TRUE)
   # R_hashedgelist(tsv, csr, clusters, queues, hashdir, seps, 1, iter, verbose)
   .Call("R_hashedgelist", edgelistfiles, length(edgelistfiles), csr_table_binary,
-        counter_cluster_binary, qfiles, hashdir, seps, ctr, iterations, verbose, is_undirected)
+        counter_cluster_binary, qfiles, hashdir, seps, ctr, iterations,
+        verbose, is_undirected, add_self_loops)
   all_hashfiles <- list.files(hashdir, full.names = TRUE)
 
   # R_write_output_clusters(clusters, hashes, length(hashes), out_tsvpath, seps)

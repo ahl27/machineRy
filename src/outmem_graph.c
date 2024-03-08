@@ -340,7 +340,7 @@ int read_edge_to_table(FILE *edgefile, FILE *mastertab, FILE *countstab, const c
 	return 1;
 }
 
-void reformat_counts(const char* curcounts, const char* mastertable, l_uint n_vert){
+void reformat_counts(const char* curcounts, const char* mastertable, l_uint n_vert, int add_self_loops){
 	/*
 	 * Creates a new table with cumulative counts
 	 * leaves the old table unchanged, this will act as a temporary counts file later
@@ -349,18 +349,94 @@ void reformat_counts(const char* curcounts, const char* mastertable, l_uint n_ve
 	l_uint cumul_total = 0, curcount;
 	FILE *tmptab = fopen(curcounts, "rb");
 	FILE *mtab = fopen(mastertable, "wb+");
+	int self_loop = add_self_loops ? 1 : 0;
 
 	for(l_uint i=0; i<n_vert; i++){
 		fwrite(&cumul_total, l_size, 1, mtab);
 		fread(&curcount, l_size, 1, tmptab);
-		cumul_total += curcount;
+		cumul_total += curcount + self_loop; // add an extra count for each node if we add self loops
 	}
 
 	// ending position of file
 	fwrite(&cumul_total, l_size, 1, mtab);
-
 	fclose(tmptab);
 	fclose(mtab);
+	return;
+}
+
+void add_self_loops_to_csrfile(const char *ftable, const char *countfile, l_uint num_v){
+	// when we add self loops, every entry in the counts file should be 1
+	// thus, we can just write to whatever the first index of the value is and set the value to 0
+	const uint entry_size = L_SIZE + sizeof(double);
+	const double self_weight = 0.5;
+	const l_uint new_entry = 0;
+
+	l_uint tmp_pos;
+
+	FILE *mastertab = fopen(ftable, "rb+");
+	if(!mastertab) error("error opening CSR file.\n");
+
+	FILE *tmptable = fopen(countfile, "rb+");
+	if(!tmptable) error("error opening temporary counts file.\n");
+
+	for(l_uint i=0; i<num_v; i++){
+		fwrite(&new_entry, L_SIZE, 0, tmptable);
+		fseek(mastertab, i*L_SIZE, SEEK_SET);
+		fread(&tmp_pos, L_SIZE, 1, mastertab);
+
+		// now we're at position i+1, need to go to num_v+2
+		// so we just have to move forward (num_v-i+1) positions to get to the end
+		fseek(mastertab, (num_v-i+1)*L_SIZE, SEEK_CUR);
+
+		// then move forward another [entry] amounts and write the current index to get a self loop
+		fseek(mastertab, tmp_pos*entry_size, SEEK_CUR);
+		fwrite(&i, L_SIZE, 1, mastertab);
+		fwrite(&self_weight, sizeof(double), 1, mastertab);
+	}
+
+	fclose(tmptable);
+	fclose(mastertab);
+}
+
+void normalize_csr_edgecounts(const char* ftable, l_uint num_v){
+	const int entry_size = L_SIZE + sizeof(double);
+	double tmp_val, normalizer;
+	l_uint start, end;
+	FILE *mastertab = fopen(ftable, "rb+");
+	if(!mastertab) error("error opening CSR file.\n");
+
+	start = 0;
+	for(l_uint i=1; i<num_v; i++){
+		normalizer = 0;
+		fseek(mastertab, i*L_SIZE, SEEK_SET);
+		fread(&end, L_SIZE, 1, mastertab);
+
+		// moving one extra L_SIZE so we're offset to the weights only
+		fseek(mastertab, (num_v-i+2)*L_SIZE, SEEK_CUR);
+		fseek(mastertab, entry_size*start, SEEK_CUR);
+		for(l_uint j=0; j<(end-start); j++){
+			fread(&tmp_val, sizeof(double), 1, mastertab);
+			normalizer += tmp_val;
+			fseek(mastertab, L_SIZE, SEEK_CUR);
+		}
+
+		// now we're at the double entry at (end + 1), need to move back to start
+		// that means moving back (end+1-start) spaces
+		fseek(mastertab, -1*entry_size*(end-start+1), SEEK_CUR);
+		normalizer = normalizer == 0 ? 1 : normalizer;
+
+		// finally we overwrite each of the values
+		for(l_uint j=0; j<(end-start); j++){
+			fread(&tmp_val, sizeof(double), 1, mastertab);
+			tmp_val /= normalizer;
+			fseek(mastertab, -1*sizeof(double), SEEK_CUR);
+			fwrite(&tmp_val, sizeof(double), 1, mastertab);
+			fseek(mastertab, L_SIZE, SEEK_CUR);
+		}
+		start = end;
+	}
+
+	fclose(mastertab);
 	return;
 }
 
@@ -437,6 +513,7 @@ l_uint update_node_cluster(l_uint ind, l_uint offset, FILE *mastertab, FILE *clu
 	GetRNGstate();
 	fseek(mastertab, L_SIZE*offset, SEEK_SET);
 	fseek(mastertab, (L_SIZE+sizeof(double))*start, SEEK_CUR);
+
 	for(int i=0; i<num_edges; i++){
 		// skip with probability
 		if(use_limited_nodes && unif_rand() > acceptance_prob){
@@ -451,7 +528,7 @@ l_uint update_node_cluster(l_uint ind, l_uint offset, FILE *mastertab, FILE *clu
 		// get which cluster it belongs to
 		fseek(clusterings, L_SIZE*tmp_id, SEEK_SET);
 		fread(&tmp_cl, L_SIZE, 1, clusterings);
-
+		R_CheckUserInterrupt();
 		/*
 		 * this solves a special edge case where uninitialized nodes with a self-loop
 		 * can be counted incorrectly if their neighbors have already been assigned to
@@ -681,7 +758,7 @@ void cluster_file(const char* mastertab_fname, const char* clust_fname,
 
 
 SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNAME, SEXP QFILES, SEXP OUTDIR,
-										SEXP SEPS, SEXP CTR, SEXP ITER, SEXP VERBOSE, SEXP IS_UNDIRECTED){
+										SEXP SEPS, SEXP CTR, SEXP ITER, SEXP VERBOSE, SEXP IS_UNDIRECTED, SEXP ADD_SELF_LOOPS){
 	/*
 	 * I always forget how to handle R strings so I'm going to record it here
 	 * R character vectors are STRSXPs, which is the same as a list (VECSXP)
@@ -715,6 +792,7 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
 	const int verbose = LOGICAL(VERBOSE)[0];
 	const int is_undirected = LOGICAL(IS_UNDIRECTED)[0];
 	l_uint num_v = (l_uint)(REAL(CTR)[0]);
+	const int add_self_loops = LOGICAL(ADD_SELF_LOOPS)[0];
 
 	// first, index all vertex names and record how many edges each has
 	for(int i=0; i<num_edgefiles; i++){
@@ -729,7 +807,7 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
  	// next, create an indexed table file of where data for each vertex will be located
  	// note that we can modify this later to hash multiple edge files before reformatting
  	if(verbose) Rprintf("Reformatting counts file...\n");
- 	reformat_counts(temptabfile, tabfile, num_v);
+ 	reformat_counts(temptabfile, tabfile, num_v, add_self_loops);
 
 
  	// then, we'll create the CSR compression of all our edges
@@ -737,6 +815,12 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
  		edgefile = CHAR(STRING_ELT(FILENAME, i));
  		csr_compress_edgelist(edgefile, dir, temptabfile, tabfile, seps[0], seps[1], num_v, verbose, is_undirected);
  	}
+
+ 	if(add_self_loops && verbose) Rprintf("Adding self loops...\n");
+ 	if(add_self_loops) add_self_loops_to_csrfile(tabfile, temptabfile, num_v);
+
+ 	//if(verbose) Rprintf("Normalizing node edge weights...\n");
+ 	//normalize_csr_edgecounts(tabfile, num_v);
 
  	// temptabfile now becomes our clustering file
  	cluster_file(tabfile, temptabfile, qfile1, qfile2, qfile3, num_v, num_iter, verbose);
