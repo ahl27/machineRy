@@ -266,11 +266,10 @@ l_uint hash_file_vnames(const char* fname, const char* dname, const char *ftable
 
 		while(c != line_sep && c != EOF) c = getc(f);
 		if(c == line_sep) c=getc(f);
-		if(v){
-			print_counter++;
-			if(print_counter % PRINT_COUNTER_MOD == 0){
-				Rprintf("\t%llu lines read\r", print_counter);
-			}
+		print_counter++;
+		if(print_counter % PRINT_COUNTER_MOD == 0){
+			if(v) Rprintf("\t%llu lines read\r", print_counter);
+			else R_CheckUserInterrupt();
 		}
 	}
 	if(v) Rprintf("\t%llu lines read\n\t%llu total nodes.\n", print_counter, cur_ctr-1);
@@ -393,10 +392,10 @@ void csr_compress_edgelist(const char* edgefile, const char* dname, const char* 
 
 	while(status){
 		status = read_edge_to_table(edgelist, mastertable, tmptable, dname, sep, linesep, entry_size, num_v, is_undirected);
-		if(v){
-			print_counter++;
-			if(print_counter % PRINT_COUNTER_MOD == 0)
-				Rprintf("\t%llu edges read\r", print_counter);
+		print_counter++;
+		if(print_counter % PRINT_COUNTER_MOD == 0){
+			if(v) Rprintf("\t%llu edges read\r", print_counter);
+			else R_CheckUserInterrupt();
 		}
 	}
 	if(v) Rprintf("\t%llu edges read\n", print_counter);

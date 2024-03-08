@@ -1,6 +1,6 @@
 Package: machineRy
 Title: Various Machine Learning Models for R
-Version: 0.2.0
+Version: 0.3.1
 Authors@R: 
     person(given="Aidan", family="Lakshman", email="AHL27@pitt.edu", role = c("aut", "cre"),
            comment = c(ORCID = "0000-0002-9465-6785"))
