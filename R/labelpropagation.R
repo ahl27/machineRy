@@ -47,7 +47,6 @@ run_clabel_prop <- function(network, max_iter=Inf){
 }
 
 fast_convert_igraph <- function(g, add_self_loop=FALSE){
-  # TODO: handle named vertices
   df <- as_data_frame(g, 'both')
   vertex_names <- df$vertices[[1]]
   vertex_map <- match(vertex_names, (vertex_names <- unique(vertex_names)))
@@ -154,6 +153,7 @@ fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
   seps <- paste(sep, linesep, sep='')
   ctr <- 1
   if(!all(file.exists(edgelistfiles))) stop("edgelist file does not exist")
+  edgelistfiles <- normalizePath(edgelistfiles, mustWork=TRUE)
   # R_hashedgelist(tsv, csr, clusters, queues, hashdir, seps, 1, iter, verbose)
   .Call("R_hashedgelist", edgelistfiles, length(edgelistfiles), csr_table_binary,
         counter_cluster_binary, qfiles, hashdir, seps, ctr, iterations, verbose, is_undirected)

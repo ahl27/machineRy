@@ -24,9 +24,7 @@
  *  - No calls to R_CheckUserInterrupt(), likely blocking for a while on large graphs
  *  - Unweighted graphs aren't supported. Unweighted graphs could save a ton of space (2x less in csr file).
  *		-> this would be a fairly big rewrite
- *  - Queues could be rewritten
- *		-> could do what erik first did with "chasing pointers", probably inefficient given each file only permits one pointer
- *		-> probably better to set up a third file with a single bit per vertex, use it to track in_queue or out_queue
+ *  - Change the node name lookup to use Trie structures so that we get logarithmic lookup time
  */
 
 #include "machineRy.h"
@@ -52,6 +50,9 @@
 
 const char DELIM = 23; // 23 = end of transmission block, not really used for anything nowadays
 const int L_SIZE = sizeof(l_uint);
+
+// set this to 1 if we should sample edges rather than use all of them
+const int use_limited_nodes = 0;
 const l_uint MAX_EDGES_EXACT = 20000; // this is a soft cap -- if above this, we sample edges probabalistically
 const int PRINT_COUNTER_MOD = 10;
 
@@ -200,7 +201,6 @@ l_uint rw_vertname(const char *vname, const char *dir, l_uint ctr){
 		fclose(f);
 		return ctr;
 	}
-
 	c = DELIM;
 	fwrite(vname, sizeof(char), strlen(vname), f);
 	fwrite(&c, sizeof(char), 1, f);
@@ -440,7 +440,7 @@ l_uint update_node_cluster(l_uint ind, l_uint offset, FILE *mastertab, FILE *clu
 	fseek(mastertab, (L_SIZE+sizeof(double))*start, SEEK_CUR);
 	for(int i=0; i<num_edges; i++){
 		// skip with probability
-		if(unif_rand() > acceptance_prob){
+		if(use_limited_nodes && unif_rand() > acceptance_prob){
 			fseek(mastertab, L_SIZE+sizeof(double), SEEK_CUR);
 			continue;
 		}
@@ -608,8 +608,8 @@ void initialize_queue(FILE *q, l_uint maxv, FILE *ctr_file){
 	l_uint j, tmp;
 	for(l_uint i=0; i<maxv; i++){
 		putc(1, ctr_file);
-		j = (l_uint) trunc(i * (unif_rand()));
-		if(j != i){
+		j = (l_uint) trunc((i+1) * (unif_rand()));
+		if(j < i){
 			// guarding edge case where unif_rand() returns 1.0
 
 			// tmp = arr[j]
@@ -618,7 +618,7 @@ void initialize_queue(FILE *q, l_uint maxv, FILE *ctr_file){
 
 			// arr[j] = i
 			fseek(q, -1*L_SIZE, SEEK_CUR);
-			fwrite(&j, L_SIZE, 1, q);
+			fwrite(&i, L_SIZE, 1, q);
 		} else {
 			tmp = i;
 		}
@@ -635,7 +635,6 @@ void initialize_queue(FILE *q, l_uint maxv, FILE *ctr_file){
 void cluster_file(const char* mastertab_fname, const char* clust_fname,
 									const char *qfile_f1, const char *qfile_f2, const char *qfile_log,
 									l_uint num_v, int max_iterations, int v){
-	// temporary implementation for now, will adjust later
 	// main runner function to cluster nodes
 	FILE *masterfile = fopen(mastertab_fname, "rb");
 	FILE *clusterfile = fopen(clust_fname, "rb+");
@@ -723,9 +722,9 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
 		edgefile = CHAR(STRING_ELT(FILENAME, i));
 		num_v += hash_file_vnames(edgefile, dir, temptabfile, seps[0], seps[1], num_v, verbose, is_undirected);
 	}
- 	// TODO: support multiple files.
- 	// 			 This is super easy, just accept CHAR input with length > 1 and call hash_file_vnames for each
- 	// 			 as long as you update ctr on each run it'll work fine, it's already set up to work like this
+ 	// num_v will always have the *next* location that we would insert a node at
+ 	// thus, once we're all done we need to decrement it by 1.
+ 	num_v--;
 
 
  	// next, create an indexed table file of where data for each vertex will be located
