@@ -144,11 +144,22 @@ l_uint rw_vertname(const char *vname, const char *dir, l_uint ctr){
 	 * ctr is used so we don't have to duplicate too much code
 	 * if ctr==0 we search for the vertex, else we try to write it
 	 * there is a concern with endianness here that we will figure out later
+	 *
+	 * Update: Going to write each value as LENGTH STRING NUM
+	 *  This way we can just compare the lengths to check for equality
+	 *	if the lengths are different, just fseek forward (length + L_SIZE)
+	 *	else compare.
+	 *  Since the string is assumed to be at most 256 char, it will fit into an uint16_t
 	 */
-	char fname[PATH_MAX];
-	const char *vtmp = vname;
+	//const char *vtmp = vname;
+	const uint16_t vname_len = strlen(vname);
+	const int LEN_SIZE = sizeof(uint16_t);
+
+	uint16_t read_len;
 	uint hash = hash_string_fnv(vname);
-	char found_name, c;
+
+	char read_name[MAX_NODE_NAME_SIZE];
+	char fname[PATH_MAX];
 
 	// build filename using the hash
 	snprintf(fname, (strlen(dir) + 5)*sizeof(char), "%s/%04x", dir, hash);
@@ -169,30 +180,19 @@ l_uint rw_vertname(const char *vname, const char *dir, l_uint ctr){
 		error("Error opening file for writing\n");
 	}
 
-	c = getc(f);
-	while(c != EOF){
-		// read in the vertex name, comparing as we go
-		vtmp = vname;
-		found_name = 1;
-		while(c != DELIM){
-			if(found_name)
-				found_name = c == *vtmp++;
-			c = getc(f);
+	// returns a size_t of the number of elements read
+	while(fread(&read_len, LEN_SIZE, 1, f)){
+		if(read_len != vname_len){
+			fseek(f, sizeof(char)*read_len+L_SIZE, SEEK_CUR);
+		} else {
+			memset(read_name, '\0', MAX_NODE_NAME_SIZE);
+			fread(read_name, sizeof(char), read_len, f);
+			fread(&ctr, L_SIZE, 1, f);
+			if(strcmp(vname, read_name) == 0){
+				fclose(f);
+				return ctr;
+			}
 		}
-
-		// edge case: written name is shorter than search name (e.g. "test", "testtest")
-		found_name = found_name && !(*vtmp);
-
-		// if we found the name, just return
-		if(found_name){
-			fread(&ctr, sizeof(l_uint), 1, f);
-			fclose(f);
-			return ctr;
-		}
-
-		// if we didn't find it, c==DELIM and we have to skip the ctr (64 bit number)
-		fseek(f, 8, SEEK_CUR);
-		c = getc(f);
 	}
 
 	// if we made it here, we haven't found the vertex and we're at the end of the file
@@ -201,9 +201,10 @@ l_uint rw_vertname(const char *vname, const char *dir, l_uint ctr){
 		fclose(f);
 		return ctr;
 	}
-	c = DELIM;
-	fwrite(vname, sizeof(char), strlen(vname), f);
-	fwrite(&c, sizeof(char), 1, f);
+
+	// else write the string
+	fwrite(&vname_len, LEN_SIZE, 1, f);
+	fwrite(vname, sizeof(char), vname_len, f);
 	fwrite(&ctr, L_SIZE, 1, f);
 	fclose(f);
 
@@ -779,7 +780,6 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
 	 */
 
 	const char* dir = CHAR(STRING_ELT(OUTDIR, 0));
-	//const char* edgefile = CHAR(STRING_ELT(FILENAME, 0));
 	const char* edgefile;
 	const char* tabfile = CHAR(STRING_ELT(TABNAME, 0));
 	const char* temptabfile = CHAR(STRING_ELT(TEMPTABNAME, 0));
@@ -851,10 +851,10 @@ SEXP R_write_output_clusters(SEXP CLUSTERFILE, SEXP HASHEDFILES, SEXP NUM_FILES,
 	const char* outfile = CHAR(STRING_ELT(OUTFILE, 0));
 	const char* seps = CHAR(STRING_ELT(SEPS, 0));
 	const char* fname;
+	uint16_t name_len;
+	int LEN_SIZE = sizeof(uint16_t);
 	char buf[MAX_NODE_NAME_SIZE];
 	char write_buf[PATH_MAX];
-	char c;
-	int ctr;
 	l_uint index, clust;
 	FILE *outf = fopen(outfile, "w");
 	FILE *f;
@@ -864,21 +864,19 @@ SEXP R_write_output_clusters(SEXP CLUSTERFILE, SEXP HASHEDFILES, SEXP NUM_FILES,
 	for(int i=0; i<nfiles; i++){
 		fname = CHAR(STRING_ELT(HASHEDFILES,i));
 		f = fopen(fname, "rb");
-		while(!feof(f)){
-			c = getc(f);
-			if(c==EOF) continue;
-			ctr = 0;
-			while(c != DELIM){
-				buf[ctr++] = c;
-				c = getc(f);
-			}
-			buf[ctr] = '\0';
-			// read in the index
+		while(fread(&name_len, LEN_SIZE, 1, f)){
+			// read in data from node names
+			memset(buf, '\0', MAX_NODE_NAME_SIZE);
+			memset(write_buf, '\0', PATH_MAX);
+			fread(buf, sizeof(char), name_len, f);
 			fread(&index, L_SIZE, 1, f);
 
+			// get the cluster for the node name
 			fseek(fclusters, L_SIZE*(index-1), SEEK_SET);
 			fread(&clust, L_SIZE, 1, fclusters);
-			snprintf(write_buf, (strlen(buf)+2)*sizeof(char)+L_SIZE, "%s%c%llu%c", buf, seps[0], clust, seps[1]);
+
+			// prepare data for output
+			snprintf(write_buf, (name_len+2)*sizeof(char)+L_SIZE, "%s%c%llu%c", buf, seps[0], clust, seps[1]);
 			fwrite(write_buf, sizeof(char), strlen(write_buf), outf);
 		}
 		fclose(f);

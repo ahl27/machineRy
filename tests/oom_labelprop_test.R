@@ -11,7 +11,7 @@ all_verts <- vapply(seq_len(num_verts),
                     character(1L))
 
 all_efiles <- paste0(file.path(basepath, 'edgelist'), seq_len(num_files), '.tsv')
-all_efiles <- "~/Downloads/test_edgelist.tsv"
+all_efiles <- "data/test_edgelist.tsv"
 for(i in seq_len(num_files)){
   edgefile <- all_efiles[i]
   all_edges <- vapply(seq_len(num_edges),
