@@ -1,6 +1,7 @@
 efile <- commandArgs(TRUE)[1L]
-num_verts <- 1000
-num_edges <- 2000
+cat('writing to', efile, '\n')
+num_verts <- 10000
+num_edges <- 40000
 
 vert_len <- sample(5:15, num_verts, r=TRUE)
 all_verts <- vapply(seq_len(num_verts),
