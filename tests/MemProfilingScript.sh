@@ -1,4 +1,7 @@
 #!/bin/sh
+
+# This script requires either gtime (gnu-time, OSX) or time (Linux)
+# Set the below alias accordingly
 alias ftime="gtime -f 'TIME:\t%E total\t%Us user\t%Ss sys\nMEMORY:\t%K(B) avg\t%M(B) max'"
 
 R -f tests/MemProfilingSetup.R --args ${1} >/dev/null
