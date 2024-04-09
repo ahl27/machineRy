@@ -25,6 +25,8 @@
  *  - Unweighted graphs aren't supported. Unweighted graphs could save a ton of space (2x less in csr file).
  *		-> this would be a fairly big rewrite
  *  - Change the node name lookup to use Trie structures so that we get logarithmic lookup time
+ *  - sizeof(char) is guaranteed to be 1 (see https://en.wikipedia.org/wiki/Sizeof). 1 is used instead to
+ *		eliminate the extra function call and simplify code somewhat.
  */
 
 #include "machineRy.h"
@@ -50,6 +52,7 @@
 
 const char DELIM = 23; // 23 = end of transmission block, not really used for anything nowadays
 const int L_SIZE = sizeof(l_uint);
+const int MAX_READ_RETRIES = 10;
 
 // set this to 1 if we should sample edges rather than use all of them
 const int use_limited_nodes = 0;
@@ -58,7 +61,26 @@ const int PRINT_COUNTER_MOD = 10;
 
 static void safe_fread(void *buffer, size_t size, size_t count, FILE *stream){
 	size_t found_values = fread(buffer, size, count, stream);
-	if(found_values != count) error("Internal error: fread read %zu values (expected %zu).\n", found_values, count);
+	if(found_values != count){
+		// two scenarios:
+
+		// 1. read past the end of the file (throw error and return)
+		if(feof(stream))
+			error("%s", "Internal error: fread tried to read past end of file.\n");
+
+		// 2. some undefined reading error (retry a few times and then return)
+		for(int i=0; i<MAX_READ_RETRIES; i++){
+			// if we read a partial value, reset the counter back
+			if(found_values) fseek(stream, -1*((int)found_values), SEEK_CUR);
+
+			// try to read again
+			found_values = fread(buffer, size, count, stream);
+			if(found_values == count) return;
+		}
+
+		// otherwise throw an error
+		error("Internal error: fread read %zu values (expected %zu).\n", found_values, count);
+	}
 	return;
 };
 
@@ -163,12 +185,13 @@ l_uint rw_vertname(const char *vname, const char *dir, l_uint ctr){
 
 	uint16_t read_len;
 	uint hash = hash_string_fnv(vname);
+	l_uint tmp_ctr;
 
 	char read_name[MAX_NODE_NAME_SIZE];
 	char fname[PATH_MAX];
 
 	// build filename using the hash
-	snprintf(fname, (strlen(dir) + 5)*sizeof(char), "%s/%04x", dir, hash);
+	snprintf(fname, strlen(dir) + 5, "%s/%04x", dir, hash);
 	FILE *f;
 	if(ctr){
 		// create file if it doesn't exist
@@ -189,14 +212,15 @@ l_uint rw_vertname(const char *vname, const char *dir, l_uint ctr){
 	// returns a size_t of the number of elements read
 	while(fread(&read_len, LEN_SIZE, 1, f)){
 		if(read_len != vname_len){
-			fseek(f, sizeof(char)*read_len+L_SIZE, SEEK_CUR);
+			fseek(f, read_len+L_SIZE, SEEK_CUR);
 		} else {
 			memset(read_name, '\0', MAX_NODE_NAME_SIZE);
-			safe_fread(read_name, sizeof(char), read_len, f);
-			safe_fread(&ctr, L_SIZE, 1, f);
+			tmp_ctr = 0;
+			safe_fread(read_name, 1, read_len, f);
+			safe_fread(&tmp_ctr, L_SIZE, 1, f);
 			if(strcmp(vname, read_name) == 0){
 				fclose(f);
-				return ctr;
+				return tmp_ctr;
 			}
 		}
 	}
@@ -210,7 +234,7 @@ l_uint rw_vertname(const char *vname, const char *dir, l_uint ctr){
 
 	// else write the string
 	fwrite(&vname_len, LEN_SIZE, 1, f);
-	fwrite(vname, sizeof(char), vname_len, f);
+	fwrite(vname, 1, vname_len, f);
 	fwrite(&ctr, L_SIZE, 1, f);
 	fclose(f);
 
@@ -231,11 +255,10 @@ l_uint hash_file_vnames(const char* fname, const char* dname, const char *ftable
 	char c = getc(f);
 	l_uint found_vert = 0, cur_ctr = ctr, num_edges = 0;
 	l_uint print_counter = 0;
-	int undiroffset = is_undirected ? 0 : 1;
 
 	if(v) Rprintf("Reading file %s...\n", fname);
 
-	while(!feof(f)){//c != EOF){
+	while(!feof(f)){
 		// going to assume we're at the beginning of a line
 		// lines should be of the form `start end weight`
 		// separation is by char `sep`
@@ -258,7 +281,7 @@ l_uint hash_file_vnames(const char* fname, const char* dname, const char *ftable
 			// if directed, only increment the outgoing edge
 			if(found_vert > cur_ctr){
 				fseek(tab, 0, SEEK_END);
-				num_edges = 1 - undiroffset;
+				num_edges = is_undirected ? 1 : 1-iter;
 				cur_ctr = found_vert;
 			} else {
 				if(!is_undirected && iter == 1) continue;
@@ -267,6 +290,7 @@ l_uint hash_file_vnames(const char* fname, const char* dname, const char *ftable
 				num_edges++;
 				fseek(tab, -1*L_SIZE, SEEK_CUR);
 			}
+
 			fwrite(&num_edges, L_SIZE, 1, tab);
 		}
 
@@ -299,6 +323,7 @@ int read_edge_to_table(FILE *edgefile, FILE *mastertab, FILE *countstab, const c
 
 	// index both the names
 	for(int i=0; i<2; i++){
+		memset(tmp, '\0', MAX_NODE_NAME_SIZE);
 		ctr = 0;
 		c = getc(edgefile);
 
@@ -309,15 +334,11 @@ int read_edge_to_table(FILE *edgefile, FILE *mastertab, FILE *countstab, const c
 			tmp[ctr++] = c;
 			c = getc(edgefile);
 		}
-		tmp[ctr] = '\0';
 		indices[i] = rw_vertname(tmp, hashdir, 0)-1;
 
 		// get offset for location we'll write to in the counts file
 		fseek(countstab, (indices[i])*L_SIZE, SEEK_SET);
 		safe_fread(&offset[i], L_SIZE, 1, countstab);
-		offset[i]--;
-		fseek(countstab, -1*L_SIZE, SEEK_CUR);
-		fwrite(&offset[i], L_SIZE, 1, countstab);
 
 		// get start location in table file we'll write to
 		fseek(mastertab, (indices[i])*L_SIZE, SEEK_SET);
@@ -337,10 +358,15 @@ int read_edge_to_table(FILE *edgefile, FILE *mastertab, FILE *countstab, const c
 	// write to file
 	for(int i=0; i<itermax; i++){
 		// note if !is_undirected then we only write from->to direction
+		offset[i]--;
 		fseek(mastertab, (num_v+1)*L_SIZE, SEEK_SET);
 		fseek(mastertab, (locs[i]+offset[i]+self_loop_inc)*entrysize, SEEK_CUR);
 		fwrite(&indices[(i+1)%2], L_SIZE, 1, mastertab);
 		fwrite(&weight, sizeof(double), 1, mastertab);
+
+		// decrement the counts file
+		fseek(countstab, indices[i]*L_SIZE, SEEK_SET);
+		fwrite(&offset[i], L_SIZE, 1, countstab);
 	}
 
 	return 1;
@@ -475,6 +501,7 @@ void csr_compress_edgelist(const char* edgefile, const char* dname, const char* 
 			else R_CheckUserInterrupt();
 		}
 	}
+	print_counter--;
 	if(v) Rprintf("\t%lu edges read\n", print_counter);
 	fclose(mastertable);
 	fclose(tmptable);
@@ -501,7 +528,6 @@ l_uint update_node_cluster(l_uint ind, l_uint offset, FILE *mastertab, FILE *clu
 	safe_fread(&start, L_SIZE, 1, mastertab);
 	safe_fread(&end, L_SIZE, 1, mastertab);
 
-
 	// if we're above the max edges, subsample the edges we read
 	num_edges = end - start;
 	// if it has no edges we can't do anything
@@ -527,6 +553,7 @@ l_uint update_node_cluster(l_uint ind, l_uint offset, FILE *mastertab, FILE *clu
 		// get which cluster it belongs to
 		fseek(clusterings, L_SIZE*tmp_id, SEEK_SET);
 		safe_fread(&tmp_cl, L_SIZE, 1, clusterings);
+
 		R_CheckUserInterrupt();
 		/*
 		 * this solves a special edge case where uninitialized nodes with a self-loop
@@ -545,6 +572,7 @@ l_uint update_node_cluster(l_uint ind, l_uint offset, FILE *mastertab, FILE *clu
 			zeromaxid = tmp_id+1; // +1 because vertices 0-indexed and clusters 1-indexed
 		}
 	}
+
 
 	// now we've read in all the edges, find the new community
 	// (and free along the way)
@@ -640,10 +668,10 @@ void add_to_queue(l_uint clust, l_uint ind, l_uint n_node, FILE *clust_f, FILE *
 	// iterate over queue file, adding numbers if not already there
 	rewind(q_f);
 	for(int j=0; j<ctr; j++){
-		fseek(ctrq_f, sizeof(char)*buf[j], SEEK_SET);
+		fseek(ctrq_f, buf[j], SEEK_SET);
 		found = getc(ctrq_f);
 		if(!found){
-			fseek(ctrq_f, -1*sizeof(char), SEEK_CUR);
+			fseek(ctrq_f, -1, SEEK_CUR);
 			putc(1, ctrq_f);
 		} else {
 			buf[j] = 0;
@@ -716,6 +744,7 @@ void cluster_file(const char* mastertab_fname, const char* clust_fname,
 	cur_q = fopen(queues[0], "wb+");
 	initialize_queue(cur_q, num_v, ctr_q);
 	fclose(cur_q);
+
 	for(int i=0; i<max_iterations; i++){
 		cur_q = fopen(queues[i%2], "rb+");
 		next_q = fopen(queues[(i+1)%2], "wb+");
@@ -723,7 +752,7 @@ void cluster_file(const char* mastertab_fname, const char* clust_fname,
 		if(qsize == 0) break;
 
 		while(fread(&tmp_ind, L_SIZE, 1, cur_q)){
-			fseek(ctr_q, sizeof(char)*tmp_ind, SEEK_SET);
+			fseek(ctr_q, tmp_ind, SEEK_SET);
 			putc(0, ctr_q);
 			cluster_res = update_node_cluster(tmp_ind, num_v+1, masterfile, clusterfile);
 			add_to_queue(cluster_res, tmp_ind, num_v, clusterfile, masterfile, next_q, ctr_q);
@@ -805,6 +834,7 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
 
  	//if(verbose) Rprintf("Normalizing node edge weights...\n");
  	//normalize_csr_edgecounts(tabfile, num_v);
+
  	// temptabfile now becomes our clustering file
  	cluster_file(tabfile, temptabfile, qfile1, qfile2, qfile3, num_v, num_iter, verbose);
 
@@ -851,7 +881,7 @@ SEXP R_write_output_clusters(SEXP CLUSTERFILE, SEXP HASHEDFILES, SEXP NUM_FILES,
 			// read in data from node names
 			memset(buf, '\0', MAX_NODE_NAME_SIZE);
 			memset(write_buf, '\0', PATH_MAX);
-			safe_fread(buf, sizeof(char), name_len, f);
+			safe_fread(buf, 1, name_len, f);
 			safe_fread(&index, L_SIZE, 1, f);
 
 			// get the cluster for the node name
@@ -859,8 +889,8 @@ SEXP R_write_output_clusters(SEXP CLUSTERFILE, SEXP HASHEDFILES, SEXP NUM_FILES,
 			safe_fread(&clust, L_SIZE, 1, fclusters);
 
 			// prepare data for output
-			snprintf(write_buf, (name_len+2)*sizeof(char)+L_SIZE, "%s%c%llu%c", buf, seps[0], clust, seps[1]);
-			fwrite(write_buf, sizeof(char), strlen(write_buf), outf);
+			snprintf(write_buf, (name_len+2)+L_SIZE, "%s%c%llu%c", buf, seps[0], clust, seps[1]);
+			fwrite(write_buf, 1, strlen(write_buf), outf);
 		}
 		fclose(f);
 	}
