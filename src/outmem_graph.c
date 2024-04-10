@@ -49,8 +49,8 @@
 #endif
 
 #define MAX_NODE_NAME_SIZE 256
-#define NODE_NAME_CACHE_SIZE 2048
-#define FILE_READ_CACHE_SIZE 512
+#define NODE_NAME_CACHE_SIZE 4096
+#define FILE_READ_CACHE_SIZE 2048
 
 const char DELIM = 23; // 23 = end of transmission block, not really used for anything nowadays
 const int L_SIZE = sizeof(l_uint);
@@ -170,6 +170,15 @@ uint hash_string_fnv(const char *str){
 	// XOR fold to 16 bits
 	hash = (hash & 0x0000FFFF) ^ ((hash & 0xFFFF0000) >> 16);
 
+	/*
+	 * take the lowest 4 bits -- the fewer files, the better due to batch processing
+	 * this means we instead only have 16 possible files. 8 bit may end up being better long-term.
+	 *
+	 * The important consideration is that reading is fast, but writing and open/closing is slow
+	 * Thus having a few big files is a lot faster than lots of small ones.
+	 * However, having a few big files affects lookup time of rw_vertname -- likely want to batch/cache this as well
+	 */
+	hash &= 0xF;
 	return hash;
 }
 
@@ -279,10 +288,6 @@ int nohash_name_cmpfunc(const void *a, const void *b){
 }
 
 int check_inputs_against_hashes(char **input_strings, char **file_strings, char *bitarray, uint ninput, uint nfile){
-	// return 0 if everything has already been seen, we can short circuit to skip all writes
-	// else return 1
-	int retval = 0;
-
 	// input_strings is sorted (length, strcmp), file_strings is not -- first we sort file_strings quickly
 	qsort(file_strings, nfile, sizeof(char*), nohash_name_cmpfunc);
 
@@ -292,7 +297,6 @@ int check_inputs_against_hashes(char **input_strings, char **file_strings, char 
 	int cmp;
 
 	while(i < ninput && j < nfile){
-		retval += bitarray[i];
 		// skip past anything we've already found
 		if(!bitarray[i] || len1 < len2){
 			i++;
@@ -309,12 +313,15 @@ int check_inputs_against_hashes(char **input_strings, char **file_strings, char 
 				j++;
 			} else {
 				bitarray[i] = 0;
-				retval--;
 				i++;
 				j++;
 			}
 		}
 	}
+
+	// return 0 if everything has already been seen, we can short circuit to skip all writes
+	int retval = 0;
+	for(int i=0; i<ninput; i++) retval += bitarray[i];
 
 	return retval;
 }
@@ -555,7 +562,10 @@ void get_edge_counts_batch(const char* fname, const char* dname, const char* fta
 
 			vname[cur_pos] = '\0';
 			cur_ctr = rw_vertname(vname, dname, 0);
-			if(cur_ctr == 0) error("Couldn't find %s", vname);
+			if(cur_ctr == 0){
+				Rprintf("Error finding %s, hash value %04x\n", vname, hash_string_fnv(vname));
+				error("Couldn't find %s", vname);
+			}
 			found = 0;
 			for(int j=0; j<NODE_NAME_CACHE_SIZE; j++){
 				if(ctr_cache[j] == cur_ctr){

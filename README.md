@@ -83,24 +83,16 @@ will be fixed in later updates.
 1,000 node graph with 8,000 edges:
 
 ```         
-                      Memory Usage (Max, Bytes)
-           igraph             2752
-machineRy,  inmem             3408
-machineRy, outmem              112
+                      Memory Usage (Max, KB)   Total Elapsed Time (sec)
+           igraph             49.2                      2.4
+machineRy,  inmem              3.2                      0.2
+machineRy, outmem              1.6                      8.4
 ```
 
 10,000 node graph with 50,000 edges:
 ```         
                       Memory Usage (Max, KB)   Total Elapsed Time (sec)
-           igraph             23.8                      0.3
-machineRy,  inmem             40.8                      0.3
-machineRy, outmem              0.4                     57.5
-```
-
-50,000 node graph with 100,000 edges:
-```         
-                      Memory Usage (Max, KB)   Total Elapsed Time (sec)
-           igraph             51.4                      2.6
-machineRy,  inmem             79.3                      0.7
-machineRy, outmem             33.1                   4:09.8
+           igraph             46.7                      0.3
+machineRy,  inmem             28.1                      0.3
+machineRy, outmem              5.9                     60.9
 ```
