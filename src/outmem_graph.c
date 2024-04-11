@@ -61,6 +61,12 @@ const int use_limited_nodes = 0;
 const l_uint MAX_EDGES_EXACT = 20000; // this is a soft cap -- if above this, we sample edges probabalistically
 const int PRINT_COUNTER_MOD = 10;
 
+typedef struct {
+	uint len;
+	char *name;
+	l_uint ctr;
+} full_read_line;
+
 static void safe_fread(void *buffer, size_t size, size_t count, FILE *stream){
 	size_t found_values = fread(buffer, size, count, stream);
 	if(found_values != count){
@@ -287,6 +293,16 @@ int nohash_name_cmpfunc(const void *a, const void *b){
 	return strcmp(aa, bb);
 }
 
+int struct_frl_cmpfunc(const void *a, const void *b){
+	full_read_line aa = *(full_read_line *)a;
+	full_read_line bb = *(full_read_line *)b;
+
+	// cast to prevent unsigned arithmetic
+	if(aa.len != bb.len) return ((int)aa.len) - ((int)bb.len);
+
+	return strcmp(aa.name, bb.name);
+}
+
 int check_inputs_against_hashes(char **input_strings, char **file_strings, char *bitarray, uint ninput, uint nfile){
 	// input_strings is sorted (length, strcmp), file_strings is not -- first we sort file_strings quickly
 	qsort(file_strings, nfile, sizeof(char*), nohash_name_cmpfunc);
@@ -320,10 +336,9 @@ int check_inputs_against_hashes(char **input_strings, char **file_strings, char 
 	}
 
 	// return 0 if everything has already been seen, we can short circuit to skip all writes
-	int retval = 0;
-	for(int i=0; i<ninput; i++) retval += bitarray[i];
-
-	return retval;
+	for(int i=0; i<ninput; i++)
+	 if(bitarray[i]) return 1;
+	return 0;
 }
 
 l_uint batch_write_nodes(char **names, int num_to_sort, const char *dir, l_uint ctr){
@@ -446,16 +461,181 @@ l_uint batch_write_nodes(char **names, int num_to_sort, const char *dir, l_uint 
 	return ctr;
 }
 
+int find_node_indices_batch(char **input_strings, full_read_line *file_lines, l_uint *indices, uint ninput, uint nfile){
+	// input_strings is sorted (length, strcmp), file_strings is not -- first we sort file_strings quickly
+	qsort(file_lines, nfile, sizeof(full_read_line), struct_frl_cmpfunc);
+
+	// then we can find all matches in linear time
+	uint i=0, j=0, len1=strlen(input_strings[i]), len2=file_lines[j].len;
+	int cmp;
+
+	while(i < ninput && j < nfile){
+		// skip past anything we've already found
+		if(indices[i] || len1 < len2){
+			i++;
+			if(i < ninput)
+				len1=strlen(input_strings[i]);
+		} else if(len1 > len2){
+			j++;
+			if(j < nfile) len2=file_lines[j].len;
+		} else {
+			cmp = strcmp(input_strings[i], file_lines[j].name);
+			if(cmp < 0){
+				i++;
+			} else if (cmp > 0){
+				j++;
+			} else {
+				indices[i] = file_lines[j].ctr;
+				i++;
+				j++;
+			}
+		}
+	}
+
+	// everything already seen in this case means all indices 0
+	for(int i=0; i<ninput; i++)
+		if(!indices[i]) return 0;
+	return 1;
+}
+
+l_uint batch_write_edgecounts(char **names, int num_to_sort, const char *dir, l_uint ctr, FILE *tab){
+	// assuming all the nodes are in a const char* array
+	const int LEN_SIZE = sizeof(uint16_t);
+
+	// holds lines from the file
+	full_read_line cached[FILE_READ_CACHE_SIZE];
+	for(int i=0; i<FILE_READ_CACHE_SIZE; i++)
+		cached[i].name = malloc(MAX_NODE_NAME_SIZE);
+
+	// filename
+	char fname[PATH_MAX];
+
+	// unique hash values, number of entries per hash counter, counts for each entry
+	uint hashes[num_to_sort], filecounts[num_to_sort];
+	uint counts[num_to_sort];
+
+	// strlens
+	uint16_t tmp_len;
+
+	// these are sometimes used for temp storage
+	uint cur_hash, tmp_hash, hashctr, num_unique_hashes;
+	l_uint foundctr;
+	int status;
+	FILE *f;
+
+	// first sort the array
+	qsort(names, num_to_sort, sizeof(char*), node_name_cmpfunc);
+
+	// next, unique the values
+	int insert_point = 0;
+	num_unique_hashes = 0;
+	hashes[0] = hash_string_fnv(names[0]);
+	counts[0] = 1;
+	hashctr = 1;
+	cur_hash = strlen(names[0]);
+	for(int i=1; i<num_to_sort; i++){
+		if(cur_hash != strlen(names[i]) || (strcmp(names[i], names[insert_point]) != 0)){
+			// if the string is different, save it
+			insert_point++;
+			counts[insert_point] = 1;
+			if(insert_point != i) memcpy(names[insert_point], names[i], MAX_NODE_NAME_SIZE);
+			cur_hash = strlen(names[insert_point]);
+
+			// if the hash is different, increment the hash counter
+			tmp_hash = hash_string_fnv(names[i]);
+			if(hashes[num_unique_hashes] != tmp_hash){
+				filecounts[num_unique_hashes] = hashctr;
+				hashctr = 0;
+				hashes[++num_unique_hashes] = tmp_hash;
+			}
+			hashctr++;
+		} else {
+			// else it's the same, so increment the corresponding count
+			counts[insert_point]++;
+		}
+	}
+	filecounts[num_unique_hashes] = hashctr;
+	num_unique_hashes++;
+	insert_point++;
+
+	char **tmp_charptr = names;
+	l_uint *lookup_indices = calloc(insert_point, L_SIZE);
+	l_uint *tmp_indices = lookup_indices;
+
+	// now the new length of the array is insert_point
+	// note that these are first sorted by hash, so once the hash value changes it will never appear again
+	tmp_hash = 0;
+	for(int i=0; i<num_unique_hashes; i++){
+		// advance string and counts array to lines for this file
+		if(i){
+			tmp_charptr = &(tmp_charptr[filecounts[i-1]]);
+			tmp_indices = &(tmp_indices[filecounts[i-1]]);
+		}
+
+		// build filename using the hash and open (should always exist)
+		snprintf(fname, strlen(dir) + 6, "%s/%04x", dir, hashes[i]);
+		f = fopen(fname, "rb");
+
+		// file failed to open
+		if(!f) error("%s", "Error opening file for writing\n");
+
+		// File is open, we now have to do the following:
+
+		// 1. reset variables
+		status = 1;
+		hashctr = 0;
+
+		// set up a loop to read in all the lines of the file
+		while(fread(&tmp_len, LEN_SIZE, 1, f)){
+			// 2a. read in the node name
+			cached[hashctr].len = tmp_len;
+			memset(cached[hashctr].name, 0, MAX_NODE_NAME_SIZE);
+			safe_fread(cached[hashctr].name, 1, tmp_len, f);
+			safe_fread(&(cached[hashctr].ctr), L_SIZE, 1, f);
+			hashctr++;
+
+			// 2b. once we've read in enough lines...
+			if(hashctr == FILE_READ_CACHE_SIZE){
+				// ...hash all the names, then check if any of the to_read names match
+				// if so, mark it in the bitarray array
+				status = find_node_indices_batch(tmp_charptr, cached, tmp_indices, filecounts[i], hashctr);
+				hashctr = 0;
+			}
+			if(!status) break;
+		}
+		// once we're at the end of the file, we have to do 2b again
+		if(hashctr) status = find_node_indices_batch(tmp_charptr, cached, tmp_indices, filecounts[i], hashctr);
+		fclose(f);
+	}
+	for(int i=0; i<FILE_READ_CACHE_SIZE; i++) free(cached[i].name);
+
+	// 3. Now we write all our counts using lookup_indices and counts
+	long offset = 0;
+	rewind(tab);
+	for(int i=0; i<insert_point; i++){
+		offset = i ? (lookup_indices[i] - lookup_indices[i-1] - 1) : (lookup_indices[i]-1);
+		fseek(tab, offset*L_SIZE, SEEK_CUR);
+		safe_fread(&foundctr, L_SIZE, 1, tab);
+		fseek(tab, -1*L_SIZE, SEEK_CUR);
+		foundctr += counts[i];
+		fwrite(&foundctr, L_SIZE, 1, tab);
+	}
+	free(lookup_indices);
+	return ctr;
+}
+
 l_uint hash_file_vnames_batch(const char* fname, const char* dname, const char *ftable,
-	const char sep, const char line_sep, l_uint ctr, int v, int is_undirected){
+	const char sep, const char line_sep, l_uint ctr, int v, int is_undirected, int count_edges){
 	/*
 	 * fname: .tsv list of edges
 	 * dname: directory of hash codes
 	 * ftable: output counts file, should be L_SIZE*num_v bytes
 	 */
 	FILE *f = fopen(fname, "rb");
-	FILE *tab = fopen(ftable, "wb+");
+	FILE *tab = NULL;
+	if(count_edges) tab = fopen(ftable, "rb+");
 	char *namecache[NODE_NAME_CACHE_SIZE];
+	int itermax = (count_edges && !is_undirected) ? 1 : 2;
 
 	for(int i=0; i<NODE_NAME_CACHE_SIZE; i++) namecache[i] = malloc(MAX_NODE_NAME_SIZE);
 
@@ -471,7 +651,7 @@ l_uint hash_file_vnames_batch(const char* fname, const char* dname, const char *
 		// going to assume we're at the beginning of a line
 		// lines should be of the form `start end weight`
 		// separation is by char `sep`
-		for(int iter=0; iter<2; iter++){
+		for(int iter=0; iter<itermax; iter++){
 			cur_pos = 0;
 			while(c != sep){
 				vname[cur_pos++] = c;
@@ -487,7 +667,10 @@ l_uint hash_file_vnames_batch(const char* fname, const char* dname, const char *
 			memcpy(namecache[cachectr], vname, strlen(vname));
 			cachectr++;
 			if(cachectr == NODE_NAME_CACHE_SIZE){
-				cur_ctr = batch_write_nodes(namecache, cachectr, dname, cur_ctr);
+				if(count_edges)
+					cur_ctr = batch_write_edgecounts(namecache, cachectr, dname, cur_ctr, tab);
+				else
+					cur_ctr = batch_write_nodes(namecache, cachectr, dname, cur_ctr);
 				cachectr = 0;
 			}
 
@@ -503,11 +686,20 @@ l_uint hash_file_vnames_batch(const char* fname, const char* dname, const char *
 			R_CheckUserInterrupt();
 		}
 	}
+	if(cachectr){
+		if(count_edges)
+			cur_ctr = batch_write_edgecounts(namecache, cachectr, dname, cur_ctr, tab);
+		else
+			cur_ctr = batch_write_nodes(namecache, cachectr, dname, cur_ctr);
+	}
 
-	if(cachectr) cur_ctr = batch_write_nodes(namecache, cachectr, dname, cur_ctr);
-	if(v) Rprintf("\t%lu lines read\n\t%lu total nodes.\n", print_counter, cur_ctr-1);
+	if(v){
+		Rprintf("\t%lu lines read\n", print_counter);
+		if(!count_edges)
+			Rprintf("\t%lu total nodes.\n", cur_ctr-1);
+	}
 	fclose(f);
-	fclose(tab);
+	if(count_edges) fclose(tab);
 
 	for(int i=0; i<NODE_NAME_CACHE_SIZE; i++) free(namecache[i]);
 	return cur_ctr-1;
@@ -1192,7 +1384,7 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
  	// first, index all vertex names
 	for(int i=0; i<num_edgefiles; i++){
 		edgefile = CHAR(STRING_ELT(FILENAME, i));
-		num_v += hash_file_vnames_batch(edgefile, dir, temptabfile, seps[0], seps[1], num_v, verbose, is_undirected);
+		num_v += hash_file_vnames_batch(edgefile, dir, NULL, seps[0], seps[1], num_v, verbose, is_undirected, 0);
 	}
 	// num_v will always have the *next* location that we would insert a node at
  	// thus, once we're all done we need to decrement it by 1.
@@ -1212,7 +1404,7 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
 	// next, record how many edges each has
 	for(int i=0; i<num_edgefiles; i++){
 		edgefile = CHAR(STRING_ELT(FILENAME, i));
-		get_edge_counts_batch(edgefile, dir, temptabfile, seps[0], seps[1], verbose, is_undirected);
+		hash_file_vnames_batch(edgefile, dir, temptabfile, seps[0], seps[1], 1, verbose, is_undirected, 1);
 	}
 
  	// next, create an indexed table file of where data for each vertex will be located
