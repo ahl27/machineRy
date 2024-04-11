@@ -76,23 +76,37 @@ algorithms is approximately linear (0.76 for my LP, 0.94 for `igraph`,
 
 ## In-memory LP vs. Out-of-memory LP
 
-Testing done on MacBook Pro with M1 Pro CPU and 32GB RAM. OOM-LP is currently
-running relatively slowly because of inefficiencies in initialization. This 
-will be fixed in later updates.
+Testing done on MacBook Pro with M1 Pro CPU and 32GB RAM. 
 
 1,000 node graph with 8,000 edges:
 
 ```         
                       Memory Usage (Max, KB)   Total Elapsed Time (sec)
-           igraph             49.2                      2.4
-machineRy,  inmem              3.2                      0.2
-machineRy, outmem              1.6                      8.4
+           igraph              6.7                      0.2
+machineRy,  inmem              7.7                      0.2
+machineRy, outmem              4.6                      0.7
 ```
 
 10,000 node graph with 50,000 edges:
 ```         
                       Memory Usage (Max, KB)   Total Elapsed Time (sec)
-           igraph             46.7                      0.3
-machineRy,  inmem             28.1                      0.3
-machineRy, outmem              5.9                     60.9
+           igraph             18.9                      0.3
+machineRy,  inmem             34.5                      0.3
+machineRy, outmem             24.1                      6.5
+```
+
+100,000 node graph with 100,000 edges:
+```         
+                      Memory Usage (Max, KB)   Total Elapsed Time (sec)
+           igraph             62.7                      1.3
+machineRy,  inmem            106.1                      0.8
+machineRy, outmem             75.4                     16.9
+```
+
+250,000 node graph with 250,000 edges:
+```         
+                      Memory Usage (Max, KB)   Total Elapsed Time (sec)
+           igraph            123.0                      5.3
+machineRy,  inmem            197.1                      1.6
+machineRy, outmem             84.5                     58.3
 ```
