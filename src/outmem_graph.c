@@ -493,18 +493,25 @@ int find_node_indices_batch(char **input_strings, full_read_line *file_lines, l_
 	qsort(file_lines, nfile, sizeof(full_read_line), struct_frl_cmpfunc);
 
 	// then we can find all matches in linear time
-	uint i=0, j=0, len1=strlen(input_strings[i]), len2=file_lines[j].len;
+	uint i=0, j=0, previ=0, prevj=0;
+	uint len1=strlen(input_strings[i]), len2=file_lines[j].len;
 	int cmp;
 
 	while(i < ninput && j < nfile){
+		if(i != previ){
+			len1 = strlen(input_strings[i]);
+			previ = i;
+		}
+		if(j != prevj){
+			len2 = file_lines[j].len;
+			prevj = j;
+		}
+
 		// skip past anything we've already found
 		if(indices[i] || len1 < len2){
 			i++;
-			if(i < ninput)
-				len1=strlen(input_strings[i]);
 		} else if(len1 > len2){
 			j++;
-			if(j < nfile) len2=file_lines[j].len;
 		} else {
 			cmp = strcmp(input_strings[i], file_lines[j].name);
 			if(cmp < 0){
@@ -519,10 +526,10 @@ int find_node_indices_batch(char **input_strings, full_read_line *file_lines, l_
 		}
 	}
 
-	// everything already seen in this case means all indices 0
+	// everything already seen in this case means all indices non-zero
 	for(int i=0; i<ninput; i++)
-		if(!indices[i]) return 0;
-	return 1;
+		if(!indices[i]) return 1;
+	return 0;
 }
 
 void lookup_indices_batch(char** names, uint num_to_lookup, const uint num_unique_hashes, const char* dir,
@@ -549,7 +556,7 @@ void lookup_indices_batch(char** names, uint num_to_lookup, const uint num_uniqu
 			tmp_charptr = &(tmp_charptr[filecounts[i-1]]);
 			tmp_indices = &(tmp_indices[filecounts[i-1]]);
 		}
-
+		
 		// build filename using the hash and open (should always exist)
 		snprintf(fname, strlen(dir) + 6, "%s/%04x", dir, hashes[i]);
 		f = fopen(fname, "rb");
@@ -581,8 +588,22 @@ void lookup_indices_batch(char** names, uint num_to_lookup, const uint num_uniqu
 			}
 			if(!status) break;
 		}
+	
 		// once we're at the end of the file, we have to do 2b again
 		if(hashctr) status = find_node_indices_batch(tmp_charptr, cached, tmp_indices, filecounts[i], hashctr);
+			for(int j=0;j<filecounts[i]; j++){
+				if(tmp_indices[i] == 0){
+					Rprintf("\n\n*******\n");
+					Rprintf("Couldn't find %s\n", tmp_charptr[j]);
+					Rprintf("Lookup with rw_vertname: %lu\n", rw_vertname(tmp_charptr[j], dir, 0));
+					Rprintf("Cache contents:\n");
+					//for(int j=0; j<hashctr; j++){
+					//	Rprintf("%s %lu %d %d %d\n", cached[j].name, cached[j].ctr, strcmp(tmp_charptr[i], cached[j].name), cached[j].len, strlen(tmp_charptr[i]));
+					//}
+					Rprintf("\n*******\n");
+					error("here");
+				}
+			}
 		fclose(f);
 	}
 	for(int i=0; i<FILE_READ_CACHE_SIZE; i++) free(cached[i].name);
@@ -1024,6 +1045,7 @@ void batch_write_edgelocs(char** names_cache, double* weights_cache, int cache_s
 			}
 		}
 	}
+
 	for(int i=0; i<NODE_NAME_CACHE_SIZE; i++) free(names_cache_copy[i]);
 	free(lookup_indices);
 
@@ -1036,6 +1058,7 @@ void batch_write_edgelocs(char** names_cache, double* weights_cache, int cache_s
 		inds[1] = indices[i*2+1]-1;
 		// run twice if undirected to get both directions
 		for(int j=0; j<itermax; j++){
+			//if(!j) Rprintf("%lu - %lu (%0.2f)\n", inds[0], inds[1], w);
 			// get offset for location we'll write to in the counts file
 			fseek(countstab, (inds[j])*L_SIZE, SEEK_SET);
 			safe_fread(&offset, L_SIZE, 1, countstab);
@@ -1127,7 +1150,7 @@ void csr_compress_edgelist_batch(const char* edgefile, const char* dname, const 
 		weights_cache[(cachectr/2)-1] = atof(vname);
 		print_counter++;
 		if(print_counter % PRINT_COUNTER_MOD == 0){
-			if(v) Rprintf("\t%lu edges read\n", print_counter);
+			if(v) Rprintf("\t%lu edges read\r", print_counter);
 			else R_CheckUserInterrupt();
 		}
 
@@ -1135,6 +1158,7 @@ void csr_compress_edgelist_batch(const char* edgefile, const char* dname, const 
 			// if size is odd, we need to stop early (only using every other index)
 			batch_write_edgelocs(names_cache, weights_cache, cachectr, dname, tmptable, mastertable,
 													entry_size, num_v, is_undirected, self_loop_inc);
+			cachectr = 0;
 		}
 
 	}
@@ -1143,7 +1167,6 @@ void csr_compress_edgelist_batch(const char* edgefile, const char* dname, const 
 												entry_size, num_v, is_undirected, self_loop_inc);
 	}
 
-	print_counter--;
 	if(v) Rprintf("\t%lu edges read\n", print_counter);
 	for(int i=0; i<NODE_NAME_CACHE_SIZE; i++) free(names_cache[i]);
 	fclose(mastertable);
