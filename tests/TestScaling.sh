@@ -2,24 +2,25 @@
 
 # This script requires either gtime (gnu-time, OSX) or time (Linux)
 # Set the below alias accordingly
-alias ftime="gtime -f 'TIME:\t%E total\t%Us user\t%Ss sys\nMEMORY:\t%M(B) max'"
+alias ftime="gtime -f '%E'"
 
+for loopctr in 1000000
+do
+echo "$loopctr vertices and edges:"
 # Create the graph
-R -f tests/MemProfilingSetup.R --args ${1} >/dev/null
+R -f tests/MemProfilingSetup.R --args ${1} $loopctr $loopctr >/dev/null
 
 # test igraph's performance
-echo "Loading igraph:"
-ftime R -e "suppressPackageStartupMessages(library(igraph))" >/dev/null
-echo "\nRunning igraph::cluster_label_prop"
+#echo "igraph:"
+#t1=$(ftime R -e "suppressPackageStartupMessages(library(igraph))" >/dev/null)
+echo "Running igraph::cluster_label_prop"
 ftime R -e "suppressPackageStartupMessages(library(igraph));\
             g <- graph_from_data_frame(read.delim('${1}', header = FALSE), directed=FALSE);\
             communities(cluster_label_prop(g))" >/dev/null
 
 # test in-memory implementation
-echo "-----\nLoading machineRy and igraph:"
-ftime R -e "suppressPackageStartupMessages(library(machineRy));\
-            suppressPackageStartupMessages(library(igraph))" >/dev/null
-echo "\nRunning Fast LP in-memory:"
+
+echo "Running Fast LP in-memory:"
 ftime R -e "suppressPackageStartupMessages(library(machineRy));\
             suppressPackageStartupMessages(library(igraph));\
             LP_igraph(graph_from_data_frame(read.delim('${1}', header = FALSE), \
@@ -27,12 +28,11 @@ ftime R -e "suppressPackageStartupMessages(library(machineRy));\
                       add_self_loop = FALSE, max_iterations=1L)" >/dev/null
 
 # test out of memory implementation
-echo "-----\nLoading machineRy:"
-ftime R -e "suppressPackageStartupMessages(library(machineRy))" >/dev/null
-echo "\nRunning LP out of memory:"
+echo "Running LP out of memory:"
 ftime R -e "suppressPackageStartupMessages(library(machineRy));\
             fastlabel_oom('${1}', \
                           add_self_loops=FALSE,\
                           iterations=1L,\
                           returnTable=FALSE,\
                           verbose=FALSE)" >/dev/null
+done

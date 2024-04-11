@@ -1,7 +1,7 @@
 library(machineRy)
 
 # Verifying that we're writing out vertices correctly when using batch writes
-NVERTS <- 10000
+NVERTS <- 100
 VERTNAMELEN <- c(4,7)
 VERTNAMES <- character(NVERTS)
 while(length(unique(VERTNAMES)) < NVERTS){

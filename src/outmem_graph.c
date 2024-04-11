@@ -556,7 +556,7 @@ void lookup_indices_batch(char** names, uint num_to_lookup, const uint num_uniqu
 			tmp_charptr = &(tmp_charptr[filecounts[i-1]]);
 			tmp_indices = &(tmp_indices[filecounts[i-1]]);
 		}
-		
+
 		// build filename using the hash and open (should always exist)
 		snprintf(fname, strlen(dir) + 6, "%s/%04x", dir, hashes[i]);
 		f = fopen(fname, "rb");
@@ -588,22 +588,9 @@ void lookup_indices_batch(char** names, uint num_to_lookup, const uint num_uniqu
 			}
 			if(!status) break;
 		}
-	
+
 		// once we're at the end of the file, we have to do 2b again
 		if(hashctr) status = find_node_indices_batch(tmp_charptr, cached, tmp_indices, filecounts[i], hashctr);
-			for(int j=0;j<filecounts[i]; j++){
-				if(tmp_indices[i] == 0){
-					Rprintf("\n\n*******\n");
-					Rprintf("Couldn't find %s\n", tmp_charptr[j]);
-					Rprintf("Lookup with rw_vertname: %lu\n", rw_vertname(tmp_charptr[j], dir, 0));
-					Rprintf("Cache contents:\n");
-					//for(int j=0; j<hashctr; j++){
-					//	Rprintf("%s %lu %d %d %d\n", cached[j].name, cached[j].ctr, strcmp(tmp_charptr[i], cached[j].name), cached[j].len, strlen(tmp_charptr[i]));
-					//}
-					Rprintf("\n*******\n");
-					error("here");
-				}
-			}
 		fclose(f);
 	}
 	for(int i=0; i<FILE_READ_CACHE_SIZE; i++) free(cached[i].name);
