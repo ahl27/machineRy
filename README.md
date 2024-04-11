@@ -1,9 +1,3 @@
----
-editor_options: 
-  markdown: 
-    wrap: 72
----
-
 # machineRy: Machine Learning Models for R
 
 This is somewhat of a sandbox for me to write machine learning models
