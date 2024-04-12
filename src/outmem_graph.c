@@ -322,7 +322,6 @@ int check_inputs_against_hashes(char **input_strings, char **file_strings, char 
 }
 
 l_uint batch_write_nodes(char **names, int num_to_sort, const char *dir, l_uint ctr){
-	int flag = ctr == 95 ? 1 : 0;
 	// assuming all the nodes are in a const char* array
 	const int LEN_SIZE = sizeof(uint16_t);
 
@@ -346,11 +345,11 @@ l_uint batch_write_nodes(char **names, int num_to_sort, const char *dir, l_uint 
 	FILE *f;
 
 	unique_strings_with_sideeffects(names, num_to_sort, filecounts, hashes, &num_unique_hashes, &insert_point, NULL, 0);
+
 	uint cum_offsets[num_unique_hashes+1];
 	cum_offsets[0] = 0;
 	for(int i=0; i<num_unique_hashes; i++) cum_offsets[i+1] = cum_offsets[i] + filecounts[i];
 
-	uint offset = 0;
 	char **tmp_charptr;
 
 	// now the new length of the array is insert_point
