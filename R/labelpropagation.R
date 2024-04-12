@@ -163,7 +163,7 @@ fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
 
   # R_write_output_clusters(clusters, hashes, length(hashes), out_tsvpath, seps)
   .Call("R_write_output_clusters", counter_cluster_binary, all_hashfiles,
-        length(all_hashfiles), outfile, "\t\n")
+        length(all_hashfiles), outfile, "\t\n", verbose)
 
   if(cleanup_files){
     for(f in c(csr_table_binary, counter_cluster_binary, qfiles))
