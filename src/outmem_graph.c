@@ -49,8 +49,8 @@
 #endif
 
 #define MAX_NODE_NAME_SIZE 256
-#define NODE_NAME_CACHE_SIZE 4096
-#define FILE_READ_CACHE_SIZE 4096
+#define NODE_NAME_CACHE_SIZE 10
+#define FILE_READ_CACHE_SIZE 10
 
 const char DELIM = 23; // 23 = end of transmission block, not really used for anything nowadays
 const int L_SIZE = sizeof(l_uint);
@@ -66,6 +66,11 @@ typedef struct {
 	char *name;
 	l_uint ctr;
 } full_read_line;
+
+typedef struct {
+	l_uint ctr1;
+	l_uint ctr2;
+} double_lu;
 
 static void safe_fread(void *buffer, size_t size, size_t count, FILE *stream){
 	size_t found_values = fread(buffer, size, count, stream);
@@ -91,6 +96,220 @@ static void safe_fread(void *buffer, size_t size, size_t count, FILE *stream){
 	}
 	return;
 };
+
+static void safe_filepath_cat(const char* dir, const char* f, char *fname, size_t fnamesize){
+	// fname should be preallocated
+	char directory_separator;
+#ifdef WIN32
+	directory_separator = '\\';
+#else
+	directory_separator = '/';
+#endif
+	memset(fname, 0, fnamesize);
+	// length is len(dir) + len(f) + 1 (separator) + 1 (terminator)
+	snprintf(fname, strlen(dir)+strlen(f)+2, "%s%c%s", dir, directory_separator, f);
+	return;
+}
+
+void simple_luint_fcopy(const char* f1, const char* f2, int mode, l_uint mod){
+	// if add_index, add the index into the file to sort
+	// otherwise reindex the sorted values and flip the values (for later)
+	double_lu dlu = {0,0};
+	l_uint prev_ind=0, ctr=0;
+	int nread;
+	FILE *orig = fopen(f1, "rb");
+	FILE *copy = fopen(f2, "wb");
+
+	switch(mode){
+	case 0: // write and add index
+		while(1){
+			dlu.ctr1++;
+			nread = fread(&dlu.ctr2, L_SIZE, 1, orig);
+			if(!nread) break;
+			fwrite(&dlu, sizeof(double_lu), 1, copy);
+		}
+		break;
+	case 1: // reindex clusters and write
+		while(1){
+			nread = fread(&dlu, sizeof(double_lu), 1, orig);
+			if(prev_ind != dlu.ctr2){
+				prev_ind = dlu.ctr2;
+				dlu.ctr2 = ++ctr;
+			} else {
+				dlu.ctr2 = ctr;
+			}
+			if(!nread) break;
+			fwrite(&dlu, sizeof(double_lu), 1, copy);
+		}
+		break;
+	case 2: // read structs, write flipped (struct becomes index, cluster)
+		while(1){
+			nread = fread(&dlu, sizeof(double_lu), 1, orig);
+			if(!nread) break;
+			prev_ind = dlu.ctr1;
+			dlu.ctr1 = dlu.ctr2;
+			dlu.ctr2 = prev_ind;
+			fwrite(&dlu, sizeof(double_lu), 1, copy);
+		}
+		break;
+	case 3: // read structs, write only second value (cluster)
+		ctr = 1;
+		while(1){
+			nread = fread(&dlu, sizeof(double_lu), 1, orig);
+			if(!nread) break;
+			if(ctr){
+				prev_ind = mod - dlu.ctr1;
+				ctr = 0;
+			}
+			dlu.ctr1 = ((dlu.ctr1 + prev_ind) % mod) + 1;
+			fwrite(&dlu.ctr1, L_SIZE, 1, copy);
+		}
+		break;
+	}
+
+	fclose(orig);
+	fclose(copy);
+	return;
+}
+
+int l_uint_compar(const void* a, const void* b){
+	double_lu aa = *(double_lu *)(a);
+	double_lu bb = *(double_lu *)(b);
+	if(aa.ctr2 - bb.ctr2)
+		return aa.ctr2 - bb.ctr2;
+	return aa.ctr1 - bb.ctr1;
+}
+
+void mergesort_clust_file(const char* f, const char* dir, int firstpass){
+	/*
+	 * reindex the clustering file with mergesort
+	 * first pass: affix an index and sort as {clust, ind}
+	 * then swap the values so that we have {ind, clust}
+	 * second pass: re-sort the values and drop the indices
+	 */
+
+	// two read pointers, one write pointer
+	FILE *f1_r1, *f1_r2, *f2_w;
+	char file1[PATH_MAX], file2[PATH_MAX];
+	char *finalfile;
+	size_t dlu_size = sizeof(double_lu);
+
+	// create the junk files we'll use
+	safe_filepath_cat(dir, "msfile1", file1, PATH_MAX);
+	safe_filepath_cat(dir, "msfile2", file2, PATH_MAX);
+
+	// first, we'll use the cache to read in preprocessed sorted blocks of size BYTES_PER_ENTRY
+	l_uint block_size = FILE_READ_CACHE_SIZE;
+	l_uint total_lines = 0;
+	l_uint max_clust = 0;
+	double_lu read_cache[FILE_READ_CACHE_SIZE];
+
+	// copy the original file into file 1
+	// on first pass append counters
+	// on second pass, flip the counters
+	simple_luint_fcopy(f, file1, firstpass ? 0 : 2, max_clust);
+
+	// open file, read in chunks, sort locally, write to file
+	l_uint cachectr = 0;
+	f1_r1 = fopen(file1, "rb");
+	f2_w = fopen(file2, "wb");
+	while(fread(&read_cache[cachectr++], dlu_size, 1, f1_r1)){
+		if(!firstpass){
+			if(read_cache[cachectr-1].ctr1 > max_clust)
+				max_clust = read_cache[cachectr-1].ctr1;
+		}
+		total_lines++;
+		if(cachectr == block_size){
+			qsort(read_cache, cachectr, dlu_size, l_uint_compar);
+			for(int i=0; i<cachectr; i++)
+				fwrite(&read_cache[i], dlu_size, 1, f2_w);
+			cachectr=0;
+		}
+	}
+	if(cachectr){
+		qsort(read_cache, cachectr, dlu_size, l_uint_compar);
+		for(int i=0; i<cachectr; i++)
+			fwrite(&read_cache[i], dlu_size, 1, f2_w);
+	}
+
+	fclose(f1_r1);
+	fclose(f2_w);
+	finalfile = file2;
+
+
+	l_uint cur_lines = 0;
+	int iter1, iter2, previt1, previt2;
+	int flip = 0, cmp;
+	double_lu tmp1, tmp2;
+	char *f1, *f2;
+	while(block_size < total_lines){
+		// f1 is always the reading file, f2 the writing file
+		if(flip){
+			f1 = file1;
+			f2 = file2;
+		} else {
+			f1 = file2;
+			f2 = file1;
+		}
+
+		flip = !flip;
+
+		f1_r1 = fopen(f1, "rb");
+		f1_r2 = fopen(f1, "rb");
+		f2_w = fopen(f2, "wb");
+		// move second pointer forward to second block
+		fseek(f1_r2, dlu_size*block_size, SEEK_CUR);
+
+		// sort file 1 into file 2
+		while(cur_lines < total_lines){
+			// sort one block from file 1 into file 2 -- iter stores lines remaining
+			iter1=total_lines - cur_lines;
+			if(iter1 > block_size) iter1 = block_size;
+			cur_lines += iter1;
+
+			iter2=total_lines - cur_lines;
+			if(iter2 > block_size) iter2 = block_size;
+			cur_lines += iter2;
+
+			previt1=iter1+1;
+			previt2=iter2+1;
+			while(iter1 || iter2){
+				// there is a bug here
+				if(iter1 && iter1 != previt1){
+					safe_fread(&tmp1, dlu_size, 1, f1_r1);
+					previt1 = iter1;
+				}
+				if(iter2 && iter2 != previt2){
+					safe_fread(&tmp2, dlu_size, 1, f1_r2);
+					previt2 = iter2;
+				}
+
+				cmp = l_uint_compar(&tmp1, &tmp2);
+				if(iter1 && (!iter2 || cmp <= 0 )){
+					fwrite(&tmp1, dlu_size, 1, f2_w);
+					iter1--;
+				} else {
+					fwrite(&tmp2, dlu_size, 1, f2_w);
+					iter2--;
+				}
+			}
+			// advance pointers one block past where we just read:
+			// if we move too far it doesn't really matter, we'll catch it on the next part
+			fseek(f1_r1, dlu_size*block_size, SEEK_CUR);
+			fseek(f1_r2, dlu_size*block_size, SEEK_CUR);
+		}
+
+		fclose(f1_r1);
+		fclose(f1_r2);
+		fclose(f2_w);
+		cur_lines = 0;
+		block_size *= 2;
+		finalfile = f2;
+	}
+	simple_luint_fcopy(finalfile, f, firstpass ? 1 : 3, max_clust);
+
+	return;
+}
 
 typedef struct ll {
 	l_uint id;
@@ -330,7 +549,7 @@ l_uint batch_write_nodes(char **names, int num_to_sort, const char *dir, l_uint 
 	for(int i=0; i<FILE_READ_CACHE_SIZE; i++) cached[i] = malloc(MAX_NODE_NAME_SIZE);
 
 	// filename, has_seen bit array
-	char fname[PATH_MAX], bitarray[num_to_sort];
+	char fname[PATH_MAX], bitarray[num_to_sort], hashcontainer[5];
 
 	// unique hash values, number of entries per hash counter
 	uint hashes[num_to_sort], filecounts[num_to_sort];
@@ -359,7 +578,9 @@ l_uint batch_write_nodes(char **names, int num_to_sort, const char *dir, l_uint 
 		tmp_charptr = &(names[cum_offsets[i]]);
 
 		// build filename using the hash
-		snprintf(fname, strlen(dir) + 6, "%s/%04x", dir, hashes[i]);
+		snprintf(hashcontainer, 5, "%04x", hashes[i]);
+		safe_filepath_cat(dir, hashcontainer, fname, PATH_MAX);
+		//snprintf(fname, strlen(dir) + 6, "%s/%04x", dir, hashes[i]);
 
 		// create file if it doesn't exist
 		f = fopen(fname, "ab+");
@@ -466,7 +687,7 @@ void lookup_indices_batch(char** names, uint num_to_lookup, const uint num_uniqu
 	full_read_line cached[FILE_READ_CACHE_SIZE];
 	for(int i=0; i<FILE_READ_CACHE_SIZE; i++)
 		cached[i].name = malloc(MAX_NODE_NAME_SIZE);
-	char fname[PATH_MAX];
+	char fname[PATH_MAX], hashcontainer[5];
 	char **tmp_charptr = names;
 	l_uint *tmp_indices = lookup_indices;
 
@@ -480,7 +701,9 @@ void lookup_indices_batch(char** names, uint num_to_lookup, const uint num_uniqu
 		}
 
 		// build filename using the hash and open (should always exist)
-		snprintf(fname, strlen(dir) + 6, "%s/%04x", dir, hashes[i]);
+		snprintf(hashcontainer, 5, "%04x", hashes[i]);
+		safe_filepath_cat(dir, hashcontainer, fname, PATH_MAX);
+		//snprintf(fname, strlen(dir) + 6, "%s/%04x", dir, hashes[i]);
 		f = fopen(fname, "rb");
 
 		// file failed to open
@@ -1159,8 +1382,9 @@ void cluster_file(const char* mastertab_fname, const char* clust_fname,
 	fclose(ctr_q);
 	fclose(masterfile);
 
-	reformat_clusters(clusterfile, num_v);
+	//reformat_clusters(clusterfile, num_v);
 	fclose(clusterfile);
+
 	remove(queues[0]);
 	remove(queues[1]);
 	remove(qfile_log);
@@ -1250,6 +1474,9 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
 
  	// temptabfile now becomes our clustering file
  	cluster_file(tabfile, temptabfile, qfile1, qfile2, qfile3, num_v, num_iter, verbose);
+
+ 	mergesort_clust_file(temptabfile, dir, 1);
+ 	mergesort_clust_file(temptabfile, dir, 0);
 
 	SEXP RETVAL = PROTECT(allocVector(REALSXP, 1));
 	REAL(RETVAL)[0] = (double) num_v;
