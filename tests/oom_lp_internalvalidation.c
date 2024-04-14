@@ -427,3 +427,220 @@ void csr_compress_edgelist(const char* edgefile, const char* dname, const char* 
 	fclose(edgelist);
 	return;
 }
+
+
+void simple_luint_fcopy(const char* f1, const char* f2, int mode, l_uint mod){
+	// if add_index, add the index into the file to sort
+	// otherwise reindex the sorted values and flip the values (for later)
+	double_lu dlu = {0,0};
+	l_uint prev_ind=0, ctr=0;
+	int nread;
+	FILE *orig = fopen(f1, "rb");
+	FILE *copy = fopen(f2, "wb");
+
+	switch(mode){
+	case 0: // write and add index
+		while(1){
+			dlu.ctr1++;
+			nread = fread(&dlu.ctr2, L_SIZE, 1, orig);
+			if(!nread) break;
+			fwrite(&dlu, sizeof(double_lu), 1, copy);
+		}
+		break;
+	case 1: // reindex clusters and write
+		while(1){
+			nread = fread(&dlu, sizeof(double_lu), 1, orig);
+			if(prev_ind != dlu.ctr2){
+				prev_ind = dlu.ctr2;
+				dlu.ctr2 = ++ctr;
+			} else {
+				dlu.ctr2 = ctr;
+			}
+			if(!nread) break;
+			fwrite(&dlu, sizeof(double_lu), 1, copy);
+		}
+		break;
+	case 2: // read structs, write flipped (struct becomes index, cluster)
+		while(1){
+			nread = fread(&dlu, sizeof(double_lu), 1, orig);
+			if(!nread) break;
+			prev_ind = dlu.ctr1;
+			dlu.ctr1 = dlu.ctr2;
+			dlu.ctr2 = prev_ind;
+			fwrite(&dlu, sizeof(double_lu), 1, copy);
+		}
+		break;
+	case 3: // read structs, write only second value (cluster)
+		ctr = 1;
+		while(1){
+			nread = fread(&dlu, sizeof(double_lu), 1, orig);
+			if(!nread) break;
+			if(ctr){
+				prev_ind = mod - dlu.ctr1;
+				ctr = 0;
+			}
+			dlu.ctr1 = ((dlu.ctr1 + prev_ind) % mod) + 1;
+			fwrite(&dlu.ctr1, L_SIZE, 1, copy);
+		}
+		break;
+	}
+
+	fclose(orig);
+	fclose(copy);
+	return;
+}
+
+void mergesort_clust_file(const char* f, const char* dir, int firstpass){
+	/*
+	 * reindex the clustering file with mergesort
+	 * first pass: affix an index and sort as {clust, ind}
+	 * then swap the values so that we have {ind, clust}
+	 * second pass: re-sort the values and drop the indices
+	 */
+
+	// two read pointers, one write pointer
+	FILE *f1_r1, *f1_r2, *f2_w;
+	char file1[PATH_MAX], file2[PATH_MAX];
+	char *finalfile;
+	size_t dlu_size = sizeof(double_lu);
+
+	// create the junk files we'll use
+	safe_filepath_cat(dir, "msfile1", file1, PATH_MAX);
+	safe_filepath_cat(dir, "msfile2", file2, PATH_MAX);
+
+	// first, we'll use the cache to read in preprocessed sorted blocks of size BYTES_PER_ENTRY
+	l_uint block_size = FILE_READ_CACHE_SIZE;
+	l_uint total_lines = 0;
+	l_uint max_clust = 0;
+	double_lu read_cache[FILE_READ_CACHE_SIZE];
+
+	// copy the original file into file 1
+	// on first pass append counters
+	// on second pass, flip the counters
+	simple_luint_fcopy(f, file1, firstpass ? 0 : 2, max_clust);
+
+	// open file, read in chunks, sort locally, write to file
+	l_uint cachectr = 0;
+	f1_r1 = fopen(file1, "rb");
+	f2_w = fopen(file2, "wb");
+	while(fread(&read_cache[cachectr++], dlu_size, 1, f1_r1)){
+		if(!firstpass){
+			if(read_cache[cachectr-1].ctr1 > max_clust)
+				max_clust = read_cache[cachectr-1].ctr1;
+		}
+		total_lines++;
+		if(cachectr == block_size){
+			qsort(read_cache, cachectr, dlu_size, l_uint_compar);
+			for(int i=0; i<cachectr; i++)
+				fwrite(&read_cache[i], dlu_size, 1, f2_w);
+			cachectr=0;
+		}
+	}
+	if(cachectr){
+		qsort(read_cache, cachectr, dlu_size, l_uint_compar);
+		for(int i=0; i<cachectr; i++)
+			fwrite(&read_cache[i], dlu_size, 1, f2_w);
+	}
+
+	fclose(f1_r1);
+	fclose(f2_w);
+	finalfile = file2;
+
+
+	l_uint cur_lines = 0;
+	int iter1, iter2, previt1, previt2;
+	int flip = 0, cmp;
+	double_lu tmp1, tmp2;
+	char *f1, *f2;
+	while(block_size < total_lines){
+		// f1 is always the reading file, f2 the writing file
+		if(flip){
+			f1 = file1;
+			f2 = file2;
+		} else {
+			f1 = file2;
+			f2 = file1;
+		}
+
+		flip = !flip;
+
+		f1_r1 = fopen(f1, "rb");
+		f1_r2 = fopen(f1, "rb");
+		f2_w = fopen(f2, "wb");
+		// move second pointer forward to second block
+		fseek(f1_r2, dlu_size*block_size, SEEK_CUR);
+
+		// sort file 1 into file 2
+		while(cur_lines < total_lines){
+			// sort one block from file 1 into file 2 -- iter stores lines remaining
+			iter1=total_lines - cur_lines;
+			if(iter1 > block_size) iter1 = block_size;
+			cur_lines += iter1;
+
+			iter2=total_lines - cur_lines;
+			if(iter2 > block_size) iter2 = block_size;
+			cur_lines += iter2;
+
+			previt1=iter1+1;
+			previt2=iter2+1;
+			while(iter1 || iter2){
+				// there is a bug here
+				if(iter1 && iter1 != previt1){
+					safe_fread(&tmp1, dlu_size, 1, f1_r1);
+					previt1 = iter1;
+				}
+				if(iter2 && iter2 != previt2){
+					safe_fread(&tmp2, dlu_size, 1, f1_r2);
+					previt2 = iter2;
+				}
+
+				cmp = l_uint_compar(&tmp1, &tmp2);
+				if(iter1 && (!iter2 || cmp <= 0 )){
+					fwrite(&tmp1, dlu_size, 1, f2_w);
+					iter1--;
+				} else {
+					fwrite(&tmp2, dlu_size, 1, f2_w);
+					iter2--;
+				}
+			}
+			// advance pointers one block past where we just read:
+			// if we move too far it doesn't really matter, we'll catch it on the next part
+			fseek(f1_r1, dlu_size*block_size, SEEK_CUR);
+			fseek(f1_r2, dlu_size*block_size, SEEK_CUR);
+		}
+
+		fclose(f1_r1);
+		fclose(f1_r2);
+		fclose(f2_w);
+		cur_lines = 0;
+		block_size *= 2;
+		finalfile = f2;
+	}
+	simple_luint_fcopy(finalfile, f, firstpass ? 1 : 3, max_clust);
+
+	return;
+}
+
+// old reformat_clusters
+
+void reformat_clusters(FILE *clusterfile, l_uint num_v){
+	l_uint tmp_cind;
+	ll *head = malloc(sizeof(ll));
+	head->next=NULL; // other values can just be garbage
+
+	rewind(clusterfile);
+	for(l_uint i=0; i<num_v; i++){
+		safe_fread(&tmp_cind, L_SIZE, 1, clusterfile);
+		tmp_cind = indexed_insert(head, tmp_cind);
+		fseek(clusterfile, -1*L_SIZE, SEEK_CUR);
+		fwrite(&tmp_cind, L_SIZE, 1, clusterfile);
+	}
+
+	ll *tmp = head;
+	while(tmp){
+		head = tmp;
+		tmp = tmp->next;
+		free(head);
+	}
+	return;
+}
