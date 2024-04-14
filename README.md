@@ -71,9 +71,7 @@ algorithms is approximately linear (0.76 for my LP, 0.94 for `igraph`,
 ## In-memory LP vs. Out-of-memory LP
 
 Testing done on MacBook Pro with M1 Pro CPU and 32GB RAM. 
-Known bugs:
-  - node counter is incorrect, reports more nodes than it has seen (doesn't seem to affect results)
-  - Reading cluster results to file is slow, will be optimized later
+Further optimizations are planned--reading in nodes is currently quadratic, but can be made to run in `O(n log n)` time by sorting the recorded node names.
 
 1,000 node graph with 8,000 edges:
 
@@ -81,7 +79,7 @@ Known bugs:
                       Memory Usage (Max, KB)   Total Elapsed Time (sec)
            igraph              6.7                      0.2
 machineRy,  inmem              7.7                      0.2
-machineRy, outmem              4.6                      0.7
+machineRy, outmem              4.6                      0.6
 ```
 
 10,000 node graph with 50,000 edges:
@@ -89,7 +87,7 @@ machineRy, outmem              4.6                      0.7
                       Memory Usage (Max, KB)   Total Elapsed Time (sec)
            igraph             18.9                      0.3
 machineRy,  inmem             34.5                      0.3
-machineRy, outmem             24.1                      6.5
+machineRy, outmem             24.1                      3.1
 ```
 
 100,000 node graph with 100,000 edges:
@@ -97,7 +95,7 @@ machineRy, outmem             24.1                      6.5
                       Memory Usage (Max, KB)   Total Elapsed Time (sec)
            igraph             62.7                      1.3
 machineRy,  inmem            106.1                      0.8
-machineRy, outmem             75.4                     16.9
+machineRy, outmem             75.4                     12.6
 ```
 
 250,000 node graph with 250,000 edges:
@@ -105,7 +103,7 @@ machineRy, outmem             75.4                     16.9
                       Memory Usage (Max, KB)   Total Elapsed Time (sec)
            igraph            123.0                      5.3
 machineRy,  inmem            197.1                      1.6
-machineRy, outmem             84.5                     58.3
+machineRy, outmem             84.5                     39.5
 ```
 
 
@@ -114,6 +112,6 @@ machineRy, outmem             84.5                     58.3
                       Memory Usage (Max, KB)   Total Elapsed Time (min:sec)
            igraph            416.6                     1:15.6
 machineRy,  inmem            756.9                     0:06.3
-machineRy, outmem             84.0                     9:32.4
+machineRy, outmem             84.0                     4:20.4
 ```
 Note: a significant amount of time for the out-memory implementation's time was spent reporting the final clusters. This can be optimized by around 10x, so final runtime should be much less.

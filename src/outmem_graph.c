@@ -49,8 +49,9 @@
 #endif
 
 #define MAX_NODE_NAME_SIZE 256
-#define NODE_NAME_CACHE_SIZE 10
-#define FILE_READ_CACHE_SIZE 10
+#define NODE_NAME_CACHE_SIZE 4096
+#define FILE_READ_CACHE_SIZE 4096
+#define NUM_BITS_HASH 4 // number of bits for hash file usage, max 32
 
 const char DELIM = 23; // 23 = end of transmission block, not really used for anything nowadays
 const int L_SIZE = sizeof(l_uint);
@@ -403,7 +404,7 @@ uint hash_string_fnv(const char *str){
 	 * Thus having a few big files is a lot faster than lots of small ones.
 	 * However, having a few big files affects lookup time of rw_vertname -- likely want to batch/cache this as well
 	 */
-	hash &= 0xF;
+	hash &= ((1ULL << NUM_BITS_HASH) - 1);
 	return hash;
 }
 
@@ -1484,7 +1485,7 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
 	return RETVAL;
 }
 
-SEXP R_write_output_clusters(SEXP CLUSTERFILE, SEXP HASHEDFILES, SEXP NUM_FILES, SEXP OUTFILE, SEXP SEPS, SEXP VERBOSE){
+SEXP R_write_output_clusters(SEXP CLUSTERFILE, SEXP HASHEDDIR, SEXP OUTFILE, SEXP SEPS, SEXP VERBOSE){
 	// we're going to leverage list.files() on the R side for this so I don't have to worry
 	// about platform-specific file handling for directory parsing
 
@@ -1499,29 +1500,33 @@ SEXP R_write_output_clusters(SEXP CLUSTERFILE, SEXP HASHEDFILES, SEXP NUM_FILES,
 	 * R_write_output_clusters(cluster_counts, list.files(hashdir), length(...), out_tsvpath, seps)
 	 */
 
-	const int nfiles = INTEGER(NUM_FILES)[0];
 	const int v = LOGICAL(VERBOSE)[0];
 	const char* cfile = CHAR(STRING_ELT(CLUSTERFILE, 0));
+	const char* hashdir = CHAR(STRING_ELT(HASHEDDIR, 0));
 	const char* outfile = CHAR(STRING_ELT(OUTFILE, 0));
 	const char* seps = CHAR(STRING_ELT(SEPS, 0));
-	const char* fname;
+	const uint fnamelen = strlen(hashdir) + 6;
 	uint16_t name_len;
 	int LEN_SIZE = sizeof(uint16_t);
-	char buf[MAX_NODE_NAME_SIZE];
-	char write_buf[PATH_MAX];
+	char buf[MAX_NODE_NAME_SIZE], fnamebuf[5];
+	char write_buf[PATH_MAX], fname[PATH_MAX];
 	l_uint index, clust, num_written=0;
 	FILE *outf = fopen(outfile, "w");
 	FILE *f;
 	if(v) Rprintf("Writing node clusters to output file...\n");
+
 	// remember that indices will be off by one
 	FILE *fclusters = fopen(cfile, "rb");
-	for(int i=0; i<nfiles; i++){
-		fname = CHAR(STRING_ELT(HASHEDFILES,i));
+	for(uint32_t i=0; i<(1ULL << NUM_BITS_HASH); i++){
+		// build all possible file paths, if they don't exist then skip
+		snprintf(fnamebuf, 5, "%04x", i);
+		safe_filepath_cat(hashdir, fnamebuf, fname, fnamelen);
 		f = fopen(fname, "rb");
+		if(!f) continue;
 		while(fread(&name_len, LEN_SIZE, 1, f)){
 			// read in data from node names
-			memset(buf, '\0', MAX_NODE_NAME_SIZE);
-			memset(write_buf, '\0', PATH_MAX);
+			memset(buf, 0, MAX_NODE_NAME_SIZE);
+			memset(write_buf, 0, PATH_MAX);
 			safe_fread(buf, 1, name_len, f);
 			safe_fread(&index, L_SIZE, 1, f);
 
