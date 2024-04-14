@@ -200,7 +200,7 @@ void postcopy_dlu2(const char* f1, const char* f2){
 
 
 
-void mergesort_clust_file_gen(const char* f, const char* dir, size_t element_size,
+void mergesort_clust_file(const char* f, const char* dir, size_t element_size,
 															int (*compar)(const void *, const void *),
 															void (*precopy)(const char*, const char*),
 															void (*postcopy)(const char*, const char*)){
@@ -1461,8 +1461,8 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
  	cluster_file(tabfile, temptabfile, qfile1, qfile2, qfile3, num_v, num_iter, verbose);
 
  	// reindex the clusters from 1 to n
- 	mergesort_clust_file_gen(temptabfile, dir, sizeof(double_lu), l_uint_compar, precopy_dlu1, postcopy_dlu1);
- 	mergesort_clust_file_gen(temptabfile, dir, sizeof(double_lu), l_uint_compar, precopy_dlu2, postcopy_dlu2);
+ 	mergesort_clust_file(temptabfile, dir, sizeof(double_lu), l_uint_compar, precopy_dlu1, postcopy_dlu1);
+ 	mergesort_clust_file(temptabfile, dir, sizeof(double_lu), l_uint_compar, precopy_dlu2, postcopy_dlu2);
 
 	SEXP RETVAL = PROTECT(allocVector(REALSXP, 1));
 	REAL(RETVAL)[0] = (double) num_v;
