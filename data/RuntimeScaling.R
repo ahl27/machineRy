@@ -25,6 +25,6 @@ plot(NULL, xlim=c(1,max(RuntimeResults[,1])), ylim=c(1, max(RuntimeResults[,-1],
      log='yx', xlab='num vertices and edges', ylab='runtime (seconds)')
 for(i in seq_len(3)){
   lines(x=RuntimeResults[,1], y=RuntimeResults[,1+i],col=i)
-  l <- lm(log(RuntimeResults[-(1:5),1+i]) ~ log(RuntimeResults[-(1:5),1]))
+  l <- lm(log(RuntimeResults[-(1:10),1+i]) ~ log(RuntimeResults[-(1:10),1]))
   cat("Scaling of", colnames(RuntimeResults)[1+i], "is", coefficients(l)[2], '\n')
 }

@@ -383,7 +383,8 @@ void mergesort_clust_file(const char* f, const char* dir, size_t element_size,
 
 	// two read pointers, one write pointer
 	FILE *f1_r1, *f1_r2, *f2_w;
-	char file1[PATH_MAX], file2[PATH_MAX];
+	char *file1 = malloc(PATH_MAX);
+	char *file2 = malloc(PATH_MAX);
 	char *finalfile;
 
 	//size_t dlu_size = sizeof(double_lu);
@@ -397,7 +398,8 @@ void mergesort_clust_file(const char* f, const char* dir, size_t element_size,
 	l_uint total_lines = 0;
 
 	// allocate space for data in a void*
-	void *read_cache[FILE_READ_CACHE_SIZE];
+	//void *read_cache[FILE_READ_CACHE_SIZE];
+	void **read_cache = malloc(sizeof(void*) * FILE_READ_CACHE_SIZE);
 	for(int i=0; i<FILE_READ_CACHE_SIZE; i++) read_cache[i] = malloc(element_size);
 
 	// copy the original file into file 1
@@ -494,14 +496,16 @@ void mergesort_clust_file(const char* f, const char* dir, size_t element_size,
 		block_size *= 2;
 		finalfile = f2;
 	}
+	// copy result back into f
+	postcopy(finalfile, f);
+
 	// free memory allocations
 	free(tmp1);
 	free(tmp2);
 	for(int i=0; i<FILE_READ_CACHE_SIZE; i++) free(read_cache[i]);
-
-	// copy result back into f
-	postcopy(finalfile, f);
-
+	free(read_cache);
+	free(file1);
+	free(file2);
 	return;
 }
 
@@ -554,7 +558,7 @@ void batch_write_nodes(char **names, int num_to_sort, FILE *f){
 	char *tmp_s;
 
 	// entries per unique string
-	uint stringcounts[num_to_sort];
+	uint *stringcounts = malloc(sizeof(uint) * num_to_sort);
 	l_uint tmpcount;
 
 	// strlens
@@ -575,6 +579,8 @@ void batch_write_nodes(char **names, int num_to_sort, FILE *f){
 		fwrite(&tmpcount, L_SIZE, 1, f);
 	}
 
+
+	free(stringcounts);
 	return;
 }
 
@@ -593,8 +599,9 @@ l_uint node_vertex_file_cleanup(const char* dir, const char* fname, const char* 
 	 */
 
 	FILE *orig, *countsfile, *indexfile;
-	char vertname[MAX_NODE_NAME_SIZE];
 	l_uint tmpcount, curloc = 0, num_v=0;
+
+	char *vertname = malloc(MAX_NODE_NAME_SIZE);
 	iline *index_line = calloc(1, sizeof(iline));
 
 	orig = fopen(fname, "rb");
@@ -610,7 +617,7 @@ l_uint node_vertex_file_cleanup(const char* dir, const char* fname, const char* 
 		index_line->index = curloc;
 		index_line->hash = hash_string_fnv(vertname);
 
-		// write length, prefix, start index to index file
+		// write length, hash, start index to index file
 		fwrite(index_line, sizeof(iline), 1, indexfile);
 
 		// write count to counts file
@@ -628,6 +635,7 @@ l_uint node_vertex_file_cleanup(const char* dir, const char* fname, const char* 
 	fclose(countsfile);
 	fclose(indexfile);
 	free(index_line);
+	free(vertname);
 	if(v) Rprintf("\t%lu nodes found\n", num_v+1);
 	return num_v;
 }
@@ -638,17 +646,15 @@ l_uint lookup_node_index(char *name, FILE *findex, FILE *fhash, l_uint num_v){
 	// findex and hashf should be opened rb
 	const size_t line_size = sizeof(iline);
 	const uint16_t namelen = strlen(name);
-	char nameprefix[PREFIX_LENGTH+1];
-	memcpy(nameprefix, name, PREFIX_LENGTH);
-	nameprefix[PREFIX_LENGTH] = 0;
 
-	char vname[MAX_NODE_NAME_SIZE];
 	uint16_t tmplen;
 	uint16_t curhash = hash_string_fnv(name);
 	int cmpresult;
 
 	l_uint min_line = 0, max_line = num_v;
 	int64_t prev_line = 0, cur_line = 0;
+
+	char *vname = malloc(MAX_NODE_NAME_SIZE);
 	iline *index_line = malloc(sizeof(iline));
 
 	rewind(findex);
@@ -667,7 +673,8 @@ l_uint lookup_node_index(char *name, FILE *findex, FILE *fhash, l_uint num_v){
 			cmpresult = strcmp(name, vname);
 			if(!cmpresult){
 				free(index_line);
-				return cur_line; // do we need to add 1?
+				free(vname);
+				return cur_line;
 			}
 		}
 
@@ -685,6 +692,7 @@ l_uint lookup_node_index(char *name, FILE *findex, FILE *fhash, l_uint num_v){
 	}
 
 	// we should never get here if we read in all the vertices correctly
+	free(vname);
 	free(index_line);
 	error("Failed to find vertex %s in hash lookup.", name);
 }
@@ -698,12 +706,13 @@ void hash_file_vnames_batch(const char* fname, const char* dname, const char *ha
 	 */
 	FILE *f = fopen(fname, "rb");
 	FILE *hashf = fopen(hashfname, "ab");
-	char *namecache[NODE_NAME_CACHE_SIZE];
 
 	// size + 1 so that there's space for marking if it's an outgoing edge
+	char *vname = malloc(MAX_NODE_NAME_SIZE+1);
+	char **namecache = malloc(sizeof(char*) * NODE_NAME_CACHE_SIZE);
+
 	for(int i=0; i<NODE_NAME_CACHE_SIZE; i++) namecache[i] = malloc(MAX_NODE_NAME_SIZE+1);
 
-	char vname[MAX_NODE_NAME_SIZE+1];
 	int cur_pos = 0, cachectr=0;
 	char c = getc(f);
 	l_uint print_counter = 0;
@@ -755,7 +764,9 @@ void hash_file_vnames_batch(const char* fname, const char* dname, const char *ha
 	fclose(hashf);
 	fclose(f);
 
+	free(vname);
 	for(int i=0; i<NODE_NAME_CACHE_SIZE; i++) free(namecache[i]);
+	free(namecache);
 	return;
 }
 
@@ -866,7 +877,7 @@ void csr_compress_edgelist_batch(const char* edgefile, const char* indexfname, c
 	l_uint inds[2], loc, offset;
 	double weight;
 
-	char vname[MAX_NODE_NAME_SIZE];
+	char *vname = malloc(MAX_NODE_NAME_SIZE);
 	int stringctr=0, itermax = is_undirected ? 2 : 1;
 	l_uint print_counter = 0;
 
@@ -946,6 +957,7 @@ void csr_compress_edgelist_batch(const char* edgefile, const char* indexfname, c
 	}
 
 	if(v) Rprintf("\t%lu edges read\n", print_counter);
+	free(vname);
 	fclose(mastertable);
 	fclose(countstable);
 	fclose(edgelist);
@@ -1056,7 +1068,7 @@ l_uint update_node_cluster(l_uint ind, l_uint offset, FILE *mastertab, FILE *clu
 
 void add_to_queue(l_uint clust, l_uint ind, l_uint n_node, FILE *clust_f, FILE *master_f, FILE *q_f, FILE *ctrq_f){
 	l_uint start, end, tmp_ind, tmp_cl, nedge;
-	l_uint buf[MAX_EDGES_EXACT];
+	l_uint *buf = malloc(L_SIZE*MAX_EDGES_EXACT);
 	double dummy;
 	int ctr = 0, found;
 
@@ -1110,6 +1122,7 @@ void add_to_queue(l_uint clust, l_uint ind, l_uint n_node, FILE *clust_f, FILE *
 		}
 	}
 
+	free(buf);
 	return;
 }
 
@@ -1236,10 +1249,10 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
 	const int add_self_loops = LOGICAL(ADD_SELF_LOOPS)[0];
 
 	// eventually let's just make these tempfiles too called by R
-	char hashfile[PATH_MAX];
+	char *hashfile = malloc(PATH_MAX);
 	safe_filepath_cat(dir, HASH_FNAME, hashfile, PATH_MAX);
 
-	char hashindex[PATH_MAX];
+	char *hashindex = malloc(PATH_MAX);
 	safe_filepath_cat(dir, HASH_INAME, hashindex, PATH_MAX);
 
 	// first hash all vertex names
@@ -1278,6 +1291,8 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
  	mergesort_clust_file(temptabfile, dir, sizeof(double_lu), l_uint_compar, precopy_dlu1, postcopy_dlu1);
  	mergesort_clust_file(temptabfile, dir, sizeof(double_lu), l_uint_compar, precopy_dlu2, postcopy_dlu2);
 
+ 	free(hashfile);
+ 	free(hashindex);
 	SEXP RETVAL = PROTECT(allocVector(REALSXP, 1));
 	REAL(RETVAL)[0] = (double) num_v;
 	UNPROTECT(1);
@@ -1304,7 +1319,7 @@ SEXP R_write_output_clusters(SEXP CLUSTERFILE, SEXP HASHEDDIR, SEXP OUTFILE, SEX
 	const char* hashdir = CHAR(STRING_ELT(HASHEDDIR, 0));
 	const char* outfile = CHAR(STRING_ELT(OUTFILE, 0));
 	const char* seps = CHAR(STRING_ELT(SEPS, 0));
-	char hashfname[PATH_MAX];
+	char *hashfname = malloc(PATH_MAX);
 	safe_filepath_cat(hashdir, HASH_FNAME, hashfname, PATH_MAX);
 
 	uint16_t name_len;
@@ -1340,6 +1355,7 @@ SEXP R_write_output_clusters(SEXP CLUSTERFILE, SEXP HASHEDDIR, SEXP OUTFILE, SEX
 	fclose(fclusters);
 	fclose(outf);
 	fclose(hashfile);
+	free(hashfname);
 
 	return R_NilValue;
 }
