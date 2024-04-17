@@ -159,7 +159,6 @@ fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
   .Call("R_hashedgelist", edgelistfiles, length(edgelistfiles), csr_table_binary,
         counter_cluster_binary, qfiles, hashdir, seps, ctr, iterations,
         verbose, is_undirected, add_self_loops)
-  all_hashfiles <- list.files(hashdir, full.names = TRUE)
 
   # R_write_output_clusters(clusters, hashes, length(hashes), out_tsvpath, seps)
   .Call("R_write_output_clusters", counter_cluster_binary, hashdir,
