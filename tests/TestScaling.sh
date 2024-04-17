@@ -4,7 +4,7 @@
 # Set the below alias accordingly
 alias ftime="gtime -f '%E'"
 
-for loopctr in 1000000
+for loopctr in 50 100 250 500 1000 2500 5000 10000 50000 100000 200000 250000 500000 1000000
 do
 echo "$loopctr vertices and edges:"
 # Create the graph

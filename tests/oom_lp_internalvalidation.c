@@ -623,6 +623,26 @@ void mergesort_clust_file(const char* f, const char* dir, int firstpass){
 
 // old reformat_clusters
 
+l_uint indexed_insert(ll *head, l_uint id){
+	// head is always just going to be dummy start pos
+	ll* tmp = head;
+	l_uint ctr = 0;
+	while(tmp->next && tmp->next->id != id){
+		tmp = tmp->next;
+		ctr++;
+	}
+
+	// two scenarios: 1) tmp->next is NULL, didn't find; 2) tmp->next is the id
+	if(!tmp->next){
+		tmp->next = malloc(sizeof(ll));
+		tmp = tmp->next;
+		tmp->id = id;
+		tmp->next = NULL;
+	}
+
+	return ctr+1;
+}
+
 void reformat_clusters(FILE *clusterfile, l_uint num_v){
 	l_uint tmp_cind;
 	ll *head = malloc(sizeof(ll));
