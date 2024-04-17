@@ -19,14 +19,13 @@
  *	- At some point it's probably worth refactoring all file accesses into some kind of struct w/ accessors
  *  	-> something like a virtual array object that's actually r/w to disk, could be useful in future
  *		-> this implementation should use mmap (and Windows equivalent when necessary) to improve random r/w
+ *		-> this is a very far off wishlist item, not necessary
  *  - Error checking needs to be improved
  *		-> no checks to ensure the edgelists are formatted the way the user claims
  *  - sizeof(char) is guaranteed to be 1 (see https://en.wikipedia.org/wiki/Sizeof). 1 is used instead to
  *		eliminate the extra function call and simplify code somewhat.
- *  - heap allocation needs to be changed to malloc calls, high potential to fail on limited hardware
- *  - probably better to use fnv hash and store that in the index file rather than prefixes
- *		-> same length but faster comparisons
- *		-> would have to redo the mergesort to subsort on hash value rather than strcmp (probably also faster)
+ *  - consensus clustering is not yet implemented, needs ability to skip the additional csr checks
+ *		-> may be worth building this out so that users can construct a graph themselves (and potentially save them)
  */
 
 #include "machineRy.h"
