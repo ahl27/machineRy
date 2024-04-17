@@ -48,7 +48,7 @@
 #define PAGE_SIZE 4096
 #endif
 
-#define MAX_NODE_NAME_SIZE 256
+#define MAX_NODE_NAME_SIZE 254 // max size of a vertex name (char array will have 2 extra spaces for terminator and flag)
 #define NODE_NAME_CACHE_SIZE 4096
 #define FILE_READ_CACHE_SIZE 4096 // used for mergesorting files
 #define PREFIX_LENGTH 4 // size of prefix used for cached vertex lookup
@@ -65,6 +65,10 @@ const int use_limited_nodes = 0;
 const l_uint MAX_EDGES_EXACT = 20000; // this is a soft cap -- if above this, we sample edges probabalistically
 const int PRINT_COUNTER_MOD = 173;
 
+
+/**********************/
+/* Struct Definitions */
+/**********************/
 typedef struct {
 	l_uint ctr1;
 	l_uint ctr2;
@@ -73,6 +77,7 @@ typedef struct {
 typedef struct {
 	uint16_t strlength;
 	char s[MAX_NODE_NAME_SIZE];
+	uint16_t hash;
 	l_uint count;
 } msort_vertex_line;
 
@@ -84,9 +89,13 @@ typedef struct ll {
 
 typedef struct {
 	uint16_t len;
-	char prefix[PREFIX_LENGTH+1];
+	uint16_t hash;
 	l_uint index;
 } iline;
+
+/**************************/
+/* Core Utility Functions */
+/**************************/
 
 ll* insert_ll(ll* head, l_uint id, double w){
 	ll *tmp = head;
@@ -156,6 +165,33 @@ void errorclose_file(FILE *f1, FILE *f2, const char* message){
 	error("%s", message);
 }
 
+uint16_t hash_string_fnv(const char *str){
+	/*
+	 * this is a Fowler-Noll-Vo hash function, it's fast and simple -- see wikipedia for constants
+	 * https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
+	 *
+	 * hashes to a 32-bit uint that we truncate depending on the value of NUM_BITS_HASH
+	*/
+	const uint fnv_prime = 0x01000193;
+	uint hash = 0x811c9dc5;
+	const char *s = str;
+	char tmp;
+
+	while(*s){
+		tmp = *s++;
+		hash *= fnv_prime;
+		hash ^= tmp;
+	}
+
+	// XOR fold to 16 bits
+	hash = (hash & 0x0000FFFF) ^ ((hash & 0xFFFF0000) >> 16);
+	return hash;
+}
+
+/************************/
+/* Comparison Functions */
+/************************/
+
 
 int l_uint_compar(const void* a, const void* b){
 	double_lu aa = **(double_lu **)(a);
@@ -172,6 +208,33 @@ int vertex_name_compar(const void* a, const void* b){
 		return aa->strlength - bb->strlength;
 	return strcmp(aa->s, bb->s);
 }
+
+int vertex_name_hash_compar(const void* a, const void* b){
+	// names are sorted as length > hash > strcmp
+	msort_vertex_line *aa = *(msort_vertex_line **)(a);
+	msort_vertex_line *bb = *(msort_vertex_line **)(b);
+	if(aa->strlength != bb->strlength)
+		return aa->strlength - bb->strlength;
+	if(aa->hash != bb->hash)
+		return aa->hash - bb->hash;
+	return strcmp(aa->s, bb->s);
+}
+
+int nohash_name_cmpfunc(const void *a, const void *b){
+	// same as above, but skip the hash comparison
+	const char *aa = *(const char **)a;
+	const char *bb = *(const char **)b;
+
+	// sort first by string length
+	int v1 = strlen(aa), v2 = strlen(bb);
+	if (v1 != v2) return v1 - v2;
+
+	return strcmp(aa, bb);
+}
+
+/**************************/
+/* File Mergesort Helpers */
+/**************************/
 
 void precopy_dlu1(const char* f1, const char* f2){
 	// write and add index
@@ -260,6 +323,7 @@ void precopy_vertexname(const char* f1, const char* f2){
 		memset(&(aa->s), 0, MAX_NODE_NAME_SIZE);
 		safe_fread(&(aa->s), 1, aa->strlength, orig);
 		safe_fread(&(aa->count), L_SIZE, 1, orig);
+		aa->hash = hash_string_fnv(aa->s);
 		fwrite(aa, sizeof(msort_vertex_line), 1, copy);
 	}
 
@@ -441,22 +505,6 @@ void mergesort_clust_file(const char* f, const char* dir, size_t element_size,
 	return;
 }
 
-/*
- * Functions for reading in node names
- */
-
-int nohash_name_cmpfunc(const void *a, const void *b){
-	// same as above, but skip the hash comparison
-	const char *aa = *(const char **)a;
-	const char *bb = *(const char **)b;
-
-	// sort first by string length
-	int v1 = strlen(aa), v2 = strlen(bb);
-	if (v1 != v2) return v1 - v2;
-
-	return strcmp(aa, bb);
-}
-
 void unique_strings_with_sideeffects(char **names, int num_to_sort, int *InsertPoint, uint *counts, int useCounts){
 	/*
 	 * This code is duplicated a lot, so just putting it here for consistency
@@ -536,7 +584,7 @@ l_uint node_vertex_file_cleanup(const char* dir, const char* fname, const char* 
 
 	// sort file by string length and name
 	if(v) Rprintf("\tSorting vertex names...");
-	mergesort_clust_file(fname, dir, sizeof(msort_vertex_line), vertex_name_compar, precopy_vertexname, postcopy_vertexname);
+	mergesort_clust_file(fname, dir, sizeof(msort_vertex_line), vertex_name_hash_compar, precopy_vertexname, postcopy_vertexname);
 	if(v) Rprintf("done.\n\tRe-indexing nodes...\n");
 	/*
 	 * now we populate three files:
@@ -558,8 +606,9 @@ l_uint node_vertex_file_cleanup(const char* dir, const char* fname, const char* 
 		memset(vertname, 0, MAX_NODE_NAME_SIZE);
 		safe_fread(vertname, 1, index_line->len, orig);
 		safe_fread(&tmpcount, L_SIZE, 1, orig);
-		memcpy(&index_line->prefix, vertname, PREFIX_LENGTH);
+
 		index_line->index = curloc;
+		index_line->hash = hash_string_fnv(vertname);
 
 		// write length, prefix, start index to index file
 		fwrite(index_line, sizeof(iline), 1, indexfile);
@@ -595,6 +644,7 @@ l_uint lookup_node_index(char *name, FILE *findex, FILE *fhash, l_uint num_v){
 
 	char vname[MAX_NODE_NAME_SIZE];
 	uint16_t tmplen;
+	uint16_t curhash = hash_string_fnv(name);
 	int cmpresult;
 
 	l_uint min_line = 0, max_line = num_v;
@@ -608,7 +658,7 @@ l_uint lookup_node_index(char *name, FILE *findex, FILE *fhash, l_uint num_v){
 		fseek(findex, (cur_line-prev_line)*line_size, SEEK_CUR);
 
 		safe_fread(index_line, sizeof(iline), 1, findex);
-		cmpresult = strcmp(nameprefix, index_line->prefix);
+		cmpresult = curhash - index_line->hash;
 		if(index_line->len == namelen && !cmpresult){
 			memset(vname, 0, MAX_NODE_NAME_SIZE);
 			fseek(fhash, index_line->index, SEEK_SET);

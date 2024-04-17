@@ -99,16 +99,9 @@ LP_igraph <- function(g, max_iterations, add_self_loop=FALSE, consensus=FALSE){
 }
 
 deparse_communities <- function(commPred){
-  n <- sum(lengths(commPred))
-  res <- integer(n)
-  names(res) <- seq_len(n)
-  for(i in seq_along(commPred)){
-    for(j in commPred[[i]]){
-      res[j] <- i
-    }
-  }
-
-  return(res)
+  comms <- rep(seq_along(commPred), times=lengths(commPred))
+  names(comms) <- unlist(commPred)
+  return(comms)
 }
 
 fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
