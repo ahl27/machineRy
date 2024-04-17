@@ -72,7 +72,8 @@ algorithms is approximately linear (0.76 for my LP, 0.94 for `igraph`,
 
 Testing done on MacBook Pro with M1 Pro CPU and 32GB RAM. 
 Slowest operation is currently reading in edges. This could be streamlined, but 
-I'm not yet sure how to do it.
+I'm not yet sure how to do it. There's also a lot of internal code bloat that I have
+to remove later.
 
 1,000 node graph with 8,000 edges:
 
