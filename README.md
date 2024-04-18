@@ -82,7 +82,7 @@ runs will not need to duplicate this effort.
 1,000 node graph with 8,000 edges:
 
 ```         
-                      Memory Usage (Max, KB)   Total Elapsed Time (sec)
+                      Memory Usage (Max, MB)   Total Elapsed Time (sec)
            igraph              6.7                      0.2
 machineRy,  inmem              7.7                      0.2
 machineRy, outmem              4.8                      0.6
@@ -90,7 +90,7 @@ machineRy, outmem              4.8                      0.6
 
 10,000 node graph with 50,000 edges:
 ```         
-                      Memory Usage (Max, KB)   Total Elapsed Time (sec)
+                      Memory Usage (Max, MB)   Total Elapsed Time (sec)
            igraph             18.9                      0.3
 machineRy,  inmem             34.5                      0.3
 machineRy, outmem             23.3                      3.1
@@ -98,7 +98,7 @@ machineRy, outmem             23.3                      3.1
 
 100,000 node graph with 100,000 edges:
 ```         
-                      Memory Usage (Max, KB)   Total Elapsed Time (sec)
+                      Memory Usage (Max, MB)   Total Elapsed Time (sec)
            igraph             62.7                      1.3
 machineRy,  inmem            106.1                      0.8
 machineRy, outmem             65.9                      9.0
@@ -106,7 +106,7 @@ machineRy, outmem             65.9                      9.0
 
 250,000 node graph with 250,000 edges:
 ```         
-                      Memory Usage (Max, KB)   Total Elapsed Time (sec)
+                      Memory Usage (Max, MB)   Total Elapsed Time (sec)
            igraph            123.0                      5.3
 machineRy,  inmem            197.1                      1.6
 machineRy, outmem             84.2                     23.9
@@ -115,8 +115,16 @@ machineRy, outmem             84.2                     23.9
 
 1,000,000 node graph with 1,000,000 edges:
 ```         
-                      Memory Usage (Max, KB)   Total Elapsed Time (min:sec)
+                      Memory Usage (Max, MB)   Total Elapsed Time (min:sec)
            igraph            416.6                     1:15.6
 machineRy,  inmem            756.9                     0:06.3
 machineRy, outmem            103.5                     1:37.0
+```
+
+10,000,000 node graph with 10,000,000 edges:
+```         
+                      Memory Usage (Max, GB)   Total Elapsed Time (hr:min:sec)
+           igraph             1.77                     1:07:10
+machineRy,  inmem             5.57                     0:01:26
+machineRy, outmem             0.08                     0:23:52
 ```

@@ -22,14 +22,18 @@
  *		-> this is a very far off wishlist item, not necessary
  *  - Error checking needs to be improved
  *		-> no checks to ensure the edgelists are formatted the way the user claims
+ *		-> make sure weights exist and are parseable
+ * 		-> remove cases where double separators are used (skip 0-length names)
  *  - sizeof(char) is guaranteed to be 1 (see https://en.wikipedia.org/wiki/Sizeof). 1 is used instead to
  *		eliminate the extra function call and simplify code somewhat.
  *  - consensus clustering is not yet implemented, needs ability to skip the additional csr checks
  *		-> may be worth building this out so that users can construct a graph themselves (and potentially save them)
+ *  - check functionality of add_self_loops and normalize_edge_counts
  */
 
 #include "machineRy.h"
 
+#define s_uint uint16_t
 #define uint uint32_t
 #define l_uint uint64_t
 
@@ -54,15 +58,17 @@
 
 const char DELIM = 23; // 23 = end of transmission block, not really used for anything nowadays
 const int L_SIZE = sizeof(l_uint);
-const int LEN_SIZE = sizeof(uint16_t);
+const int LEN_SIZE = sizeof(s_uint);
 const int MAX_READ_RETRIES = 10;
 const char HASH_FNAME[] = "hashfile";
 const char HASH_INAME[] = "hashindex";
+const char CONS_TMPNAME[] = "tmpgraph";
 
 // set this to 1 if we should sample edges rather than use all of them
 const int use_limited_nodes = 0;
 const l_uint MAX_EDGES_EXACT = 20000; // this is a soft cap -- if above this, we sample edges probabalistically
 const int PRINT_COUNTER_MOD = 173;
+const int PROGRESS_COUNTER_MOD = 3083;
 
 
 /**********************/
@@ -74,9 +80,9 @@ typedef struct {
 } double_lu;
 
 typedef struct {
-	uint16_t strlength;
+	s_uint strlength;
 	char s[MAX_NODE_NAME_SIZE];
-	uint16_t hash;
+	s_uint hash;
 	l_uint count;
 } msort_vertex_line;
 
@@ -87,8 +93,8 @@ typedef struct ll {
 } ll;
 
 typedef struct {
-	uint16_t len;
-	uint16_t hash;
+	s_uint len;
+	s_uint hash;
 	l_uint index;
 } iline;
 
@@ -164,12 +170,12 @@ void errorclose_file(FILE *f1, FILE *f2, const char* message){
 	error("%s", message);
 }
 
-uint16_t hash_string_fnv(const char *str){
+s_uint hash_string_fnv(const char *str){
 	/*
 	 * this is a Fowler-Noll-Vo hash function, it's fast and simple -- see wikipedia for constants
 	 * https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
 	 *
-	 * hashes to a 32-bit uint that we truncate depending on the value of NUM_BITS_HASH
+	 * hashes to a 32-bit uint that we truncate to 16 bit for s_uint
 	*/
 	const uint fnv_prime = 0x01000193;
 	uint hash = 0x811c9dc5;
@@ -561,7 +567,7 @@ void batch_write_nodes(char **names, int num_to_sort, FILE *f){
 	l_uint tmpcount;
 
 	// strlens
-	uint16_t cur_len;
+	s_uint cur_len;
 
 	// these are sometimes used for temp storage
 	int insert_point;
@@ -590,7 +596,7 @@ l_uint node_vertex_file_cleanup(const char* dir, const char* fname, const char* 
 	// sort file by string length and name
 	if(v) Rprintf("\tSorting vertex names...");
 	mergesort_clust_file(fname, dir, sizeof(msort_vertex_line), vertex_name_hash_compar, precopy_vertexname, postcopy_vertexname);
-	if(v) Rprintf("done.\n\tRe-indexing nodes...\n");
+	if(v) Rprintf("done.\n\tRe-indexing vertices...\n");
 	/*
 	 * now we populate three files:
 	 * - fname will hold the indices for where to find each variable (length, first 4 characters (0-padded), start index)
@@ -621,11 +627,10 @@ l_uint node_vertex_file_cleanup(const char* dir, const char* fname, const char* 
 
 		// write count to counts file
 		fwrite(&tmpcount, L_SIZE, 1, countsfile);
-
 		curloc += line_fixed_size + index_line->len;
 		num_v++;
 		if(!(num_v % PRINT_COUNTER_MOD)){
-			if(v) Rprintf("\t%lu nodes found\r", num_v+1);
+			if(v) Rprintf("\t%lu vertices found\r", num_v);
 			else R_CheckUserInterrupt();
 		}
 	}
@@ -635,7 +640,7 @@ l_uint node_vertex_file_cleanup(const char* dir, const char* fname, const char* 
 	fclose(indexfile);
 	free(index_line);
 	free(vertname);
-	if(v) Rprintf("\t%lu nodes found\n", num_v+1);
+	if(v) Rprintf("\t%lu vertices found\n", num_v);
 	return num_v;
 }
 
@@ -644,10 +649,10 @@ l_uint lookup_node_index(char *name, FILE *findex, FILE *fhash, l_uint num_v){
 
 	// findex and hashf should be opened rb
 	const size_t line_size = sizeof(iline);
-	const uint16_t namelen = strlen(name);
+	const s_uint namelen = strlen(name);
 
-	uint16_t tmplen;
-	uint16_t curhash = hash_string_fnv(name);
+	s_uint tmplen;
+	s_uint curhash = hash_string_fnv(name);
 	int cmpresult;
 
 	l_uint min_line = 0, max_line = num_v;
@@ -720,12 +725,12 @@ void hash_file_vnames_batch(const char* fname, const char* dname, const char *ha
 
 	while(!feof(f)){
 		// going to assume we're at the beginning of a line
-		// lines should be of the form `start end weight`
+		// lines should be of the form `start end weight` or `start end`
 		// separation is by char `sep`
 		for(int iter=0; iter<2; iter++){
 			memset(vname, 0, MAX_NODE_NAME_SIZE+1);
 			cur_pos = 0;
-			while(c != sep){
+			while(c != sep && c != line_sep){
 				vname[cur_pos++] = c;
 				c = getc(f);
 				if(cur_pos == MAX_NODE_NAME_SIZE-1) // max size has to include the null terminator
@@ -746,7 +751,9 @@ void hash_file_vnames_batch(const char* fname, const char* dname, const char *ha
 				cachectr = 0;
 			}
 
-			c = getc(f);
+			// if lines are of the form `start end`, we need to leave c on the terminator
+			if(c == sep)
+				c = getc(f);
 		}
 
 		while(c != line_sep && !feof(f)) c = getc(f);
@@ -793,12 +800,11 @@ void reformat_counts(const char* curcounts, const char* mastertable, l_uint n_ve
 	return;
 }
 
-void add_self_loops_to_csrfile(const char *ftable, l_uint num_v){
+void add_self_loops_to_csrfile(const char *ftable, l_uint num_v, const double self_weight){
 	// If self loops are included, the first entry for each node remains empty
 	// here we'll fill it in with the node itself
 	// thus, we can just write to whatever the first index of the value is and set the value to 0
 	const uint entry_size = L_SIZE + sizeof(double);
-	const double self_weight = 0.5;
 
 	l_uint tmp_pos;
 
@@ -829,32 +835,31 @@ void normalize_csr_edgecounts(const char* ftable, l_uint num_v){
 	if(!mastertab) error("%s", "error opening CSR file.\n");
 
 	start = 0;
-	for(l_uint i=1; i<num_v; i++){
+	for(l_uint i=0; i<num_v-1; i++){
 		normalizer = 0;
-		fseek(mastertab, i*L_SIZE, SEEK_SET);
+		fseek(mastertab, (i+1)*L_SIZE, SEEK_SET);
 		safe_fread(&end, L_SIZE, 1, mastertab);
-
-		// moving one extra L_SIZE so we're offset to the weights only
-		fseek(mastertab, (num_v-i+2)*L_SIZE, SEEK_CUR);
-		fseek(mastertab, entry_size*start, SEEK_CUR);
+		// pointer is now at position i+2, need to go to num_v+1
+		// num_v+1-(i+2) = num_v-i-1
+		fseek(mastertab, (num_v-i-1)*L_SIZE, SEEK_CUR);
+		fseek(mastertab, start*entry_size, SEEK_CUR);
 		for(l_uint j=0; j<(end-start); j++){
+			fseek(mastertab, L_SIZE, SEEK_CUR);
 			safe_fread(&tmp_val, sizeof(double), 1, mastertab);
 			normalizer += tmp_val;
-			fseek(mastertab, L_SIZE, SEEK_CUR);
 		}
 
-		// now we're at the double entry at (end + 1), need to move back to start
-		// that means moving back (end+1-start) spaces
-		fseek(mastertab, -1*entry_size*(end-start+1), SEEK_CUR);
-		normalizer = !normalizer;
+		// now we're at the entry at (end), need to move back to start
+		// that means moving back (end+start) spaces
+		fseek(mastertab, -1*entry_size*(end-start), SEEK_CUR);
 
 		// finally we overwrite each of the values
 		for(l_uint j=0; j<(end-start); j++){
+			fseek(mastertab, L_SIZE, SEEK_CUR);
 			safe_fread(&tmp_val, sizeof(double), 1, mastertab);
 			tmp_val /= normalizer;
 			fseek(mastertab, -1*sizeof(double), SEEK_CUR);
 			fwrite(&tmp_val, sizeof(double), 1, mastertab);
-			fseek(mastertab, L_SIZE, SEEK_CUR);
 		}
 		start = end;
 	}
@@ -863,8 +868,10 @@ void normalize_csr_edgecounts(const char* ftable, l_uint num_v){
 	return;
 }
 
-void csr_compress_edgelist_batch(const char* edgefile, const char* indexfname, const char* hashfname, const char* curcountfile, const char* ftable,
-														const char sep, const char linesep, l_uint num_v, int v, const int is_undirected, int has_self_loops){
+void csr_compress_edgelist_batch(const char* edgefile, const char* indexfname, const char* hashfname,
+																	const char* curcountfile, const char* ftable,
+																	const char sep, const char linesep, l_uint num_v, int v,
+																	const int is_undirected, int has_self_loops, const int ignore_weights){
 	/*
 	 * This should be called after we've already read in all our files
 	 * critically, ensure we're rewritten our ftable file such that it is cumulative counts and not vertex counts
@@ -897,7 +904,7 @@ void csr_compress_edgelist_batch(const char* edgefile, const char* indexfname, c
 
 	hashfile = fopen(hashfname, "rb");
 	indexfile = fopen(indexfname, "rb");
-	if(v) Rprintf("Reading edges from file %s...\n", edgefile);
+	if(v) Rprintf("\tReading file %s...\n", edgefile);
 
 	char c = getc(edgelist);
 	while(!feof(edgelist)){
@@ -905,27 +912,41 @@ void csr_compress_edgelist_batch(const char* edgefile, const char* indexfname, c
 		for(int i=0; i<2; i++){
 			stringctr = 0;
 			memset(vname, 0, MAX_NODE_NAME_SIZE);
-			while(c != sep){
+			while(c != sep && c != linesep){
 				vname[stringctr++] = c;
 				c = getc(edgelist);
 			}
+			// short circuit to skip a length-0 name
+			if(stringctr == 0){
+				i--;
+				c = getc(edgelist);
+				continue;
+			}
 			inds[i] = lookup_node_index(vname, indexfile, hashfile, num_v);
 
-			// advance one past the separator
-			c = getc(edgelist);
+			// advance one past the separator if it isn't linesep
+			// it would equal linesep if we don't have weights included
+			if(c == sep)
+				c = getc(edgelist);
 		}
-		// read in the weight
-		stringctr = 0;
-		memset(vname, 0, MAX_NODE_NAME_SIZE);
-		c = getc(edgelist);
-		while(c != linesep){
-			vname[stringctr++] = c;
+		if(!ignore_weights){
+			// read in the weight
+			stringctr = 0;
+			memset(vname, 0, MAX_NODE_NAME_SIZE);
 			c = getc(edgelist);
+			while(c != linesep){
+				vname[stringctr++] = c;
+				c = getc(edgelist);
+			}
+			weight = atof(vname);
+		} else {
+			weight = 1.0;
+			while(c != linesep)
+				c = getc(edgelist);
 		}
+
 		// advance one past the separator
 		c = getc(edgelist);
-
-		weight = atof(vname);
 
 		// write the edge
 		for(int j=0; j<itermax; j++){
@@ -939,7 +960,7 @@ void csr_compress_edgelist_batch(const char* edgefile, const char* indexfname, c
 
 			// write the edge
 			fseek(mastertable, (num_v+1)*L_SIZE, SEEK_SET);
-			fseek(mastertable, (loc+offset+self_loop_inc)*entry_size, SEEK_CUR);
+			fseek(mastertable, (loc+offset+self_loop_inc-1)*entry_size, SEEK_CUR);
 			fwrite(&inds[(j+1)%2], L_SIZE, 1, mastertable);
 			fwrite(&weight, sizeof(double), 1, mastertable);
 
@@ -977,6 +998,7 @@ l_uint update_node_cluster(l_uint ind, l_uint offset, FILE *mastertab, FILE *clu
 	 *	- clusterings: file of current cluster numbers (0=unassigned)
 	 */
 	R_CheckUserInterrupt();
+	const size_t entry_size = L_SIZE + sizeof(double);
 	l_uint start, end, num_edges, tmp_cl, tmp_id, zeromaxid=ind+1;
 	double tmp_w, acceptance_prob, zeromax=0;
 
@@ -994,12 +1016,12 @@ l_uint update_node_cluster(l_uint ind, l_uint offset, FILE *mastertab, FILE *clu
 	ll *searchpath = NULL;
 	GetRNGstate();
 	fseek(mastertab, L_SIZE*offset, SEEK_SET);
-	fseek(mastertab, (L_SIZE+sizeof(double))*start, SEEK_CUR);
+	fseek(mastertab, entry_size*start, SEEK_CUR);
 
 	for(int i=0; i<num_edges; i++){
 		// skip with probability
 		if(use_limited_nodes && unif_rand() > acceptance_prob){
-			fseek(mastertab, L_SIZE+sizeof(double), SEEK_CUR);
+			fseek(mastertab, entry_size, SEEK_CUR);
 			continue;
 		}
 
@@ -1169,18 +1191,28 @@ void cluster_file(const char* mastertab_fname, const char* clust_fname,
 	FILE *clusterfile = fopen(clust_fname, "rb+");
 	FILE *cur_q, *next_q, *ctr_q;
 	const char* queues[] = {qfile_f1, qfile_f2};
-	const char* progress = "\\|/-\\|/-";
+	//const char* progress = "\\|/-\\|/-";
+	const char* progress[] = {"|o-----|", "|-o----|", "|--o---|", "|---o--|", "|----o-|", "|-----o|",
+														"|-----o|", "|----o-|", "|---o--|", "|--o---|", "|-o----|", "|o-----|"};
+	const int progbarlen = 12;
+	const int progbarcharlen = 8;
+	char progpreprint[progbarcharlen+1];
+	memset(progpreprint, '\b', progbarcharlen);
 
 	ctr_q = fopen(qfile_log, "wb+");
 	l_uint cluster_res, qsize, tmp_ind;
+	int print_counter=0, i=0;
+	uint statusctr=0;
 
 	// randomly initialize queue and ctr file
-	if(v) Rprintf("Clustering: |\r");
+	if(v) Rprintf("\tInitializing queues...");
 	cur_q = fopen(queues[0], "wb+");
 	initialize_queue(cur_q, num_v, ctr_q);
 	fclose(cur_q);
+	if(v) Rprintf("done.\n\tClustering network:\n");
 
-	for(int i=0; i<max_iterations; i++){
+	if(v) Rprintf("\t0%% complete %s", progress[++statusctr%progbarlen]);
+	while(i+1 != max_iterations){
 		cur_q = fopen(queues[i%2], "rb+");
 		next_q = fopen(queues[(i+1)%2], "wb+");
 		qsize = get_qsize(cur_q);
@@ -1191,17 +1223,37 @@ void cluster_file(const char* mastertab_fname, const char* clust_fname,
 			putc(0, ctr_q);
 			cluster_res = update_node_cluster(tmp_ind, num_v+1, masterfile, clusterfile);
 			add_to_queue(cluster_res, tmp_ind, num_v, clusterfile, masterfile, next_q, ctr_q);
+			print_counter++;
+			if(!(print_counter % PROGRESS_COUNTER_MOD)){
+				if(v){
+					if(max_iterations > 0)
+						Rprintf("\r\t%.0f%% complete %s", ((double)(i+1) / max_iterations)*100, progress[++statusctr%progbarlen]);
+					else
+						Rprintf("\r\t%d iterations %s", i+1, progress[++statusctr%progbarlen]);
+				}
+				else R_CheckUserInterrupt();
+			}
 		}
 
 		fclose(cur_q);
 		fclose(next_q);
-		if(v) Rprintf("Clustering: %.0f%% complete %c\r", ((double)(i+1) / max_iterations)*100, progress[i%8]);
+		if(v){
+			if(max_iterations > 0)
+				Rprintf("\r\t%.0f%% complete %s", ((double)(i+1) / max_iterations)*100, progress[++statusctr%progbarlen]);
+			else
+				Rprintf("\r\t%d iterations %s", i+1, progress[++statusctr%progbarlen]);
+		}
+		i++;
 	}
-	if(v) Rprintf("Clustering: 100%% complete.   \n");
+	if(v){
+		if(max_iterations > 0)
+			Rprintf("\r\t100%% complete!                \n");
+		else
+			Rprintf("\r\tComplete! (%d total iterations)     \n", i+1);
+	}
+
 	fclose(ctr_q);
 	fclose(masterfile);
-
-	//reformat_clusters(clusterfile, num_v);
 	fclose(clusterfile);
 
 	remove(queues[0]);
@@ -1211,8 +1263,9 @@ void cluster_file(const char* mastertab_fname, const char* clust_fname,
 }
 
 
-SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNAME, SEXP QFILES, SEXP OUTDIR,
-										SEXP SEPS, SEXP CTR, SEXP ITER, SEXP VERBOSE, SEXP IS_UNDIRECTED, SEXP ADD_SELF_LOOPS){
+SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNAME, SEXP QFILES, SEXP OUTDIR, // files
+										SEXP SEPS, SEXP CTR, SEXP ITER, SEXP VERBOSE, // control flow
+										SEXP IS_UNDIRECTED, SEXP ADD_SELF_LOOPS, SEXP IGNORE_WEIGHTS, SEXP NORMALIZE_WEIGHTS){ //optional adjustments
 	/*
 	 * I always forget how to handle R strings so I'm going to record it here
 	 * R character vectors are STRSXPs, which is the same as a list (VECSXP)
@@ -1245,7 +1298,10 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
 	const int verbose = LOGICAL(VERBOSE)[0];
 	const int is_undirected = LOGICAL(IS_UNDIRECTED)[0];
 	l_uint num_v = (l_uint)(REAL(CTR)[0]);
-	const int add_self_loops = LOGICAL(ADD_SELF_LOOPS)[0];
+	const double self_loop_weight = REAL(ADD_SELF_LOOPS)[0];
+	const int add_self_loops = self_loop_weight > 0;
+	const int should_normalize = LOGICAL(NORMALIZE_WEIGHTS)[0];
+	const int ignore_weights = LOGICAL(IGNORE_WEIGHTS)[0];
 
 	// eventually let's just make these tempfiles too called by R
 	char *hashfile = malloc(PATH_MAX);
@@ -1267,23 +1323,25 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
 	num_v = node_vertex_file_cleanup(dir, hashfile, temptabfile, hashindex, verbose);
 
  	// next, create an indexed table file of where data for each vertex will be located
- 	if(verbose) Rprintf("Reformatting node degree file...\n");
+ 	if(verbose) Rprintf("Reformatting vertex degree file...\n");
  	reformat_counts(temptabfile, tabfile, num_v, add_self_loops);
 
  	// then, we'll create the CSR compression of all our edges
  	if(verbose) Rprintf("Reading in edges...\n");
  	for(int i=0; i<num_edgefiles; i++){
  		edgefile = CHAR(STRING_ELT(FILENAME, i));
- 		csr_compress_edgelist_batch(edgefile, hashindex, hashfile, temptabfile, tabfile, seps[0], seps[1], num_v, verbose, is_undirected, add_self_loops);
+ 		csr_compress_edgelist_batch(edgefile, hashindex, hashfile, temptabfile, tabfile, seps[0], seps[1],
+ 																num_v, verbose, is_undirected, add_self_loops, ignore_weights);
  	}
 
  	if(add_self_loops && verbose) Rprintf("Adding self loops...\n");
- 	if(add_self_loops) add_self_loops_to_csrfile(tabfile, num_v);
+ 	if(add_self_loops) add_self_loops_to_csrfile(tabfile, num_v, self_loop_weight);
 
- 	//if(verbose) Rprintf("Normalizing node edge weights...\n");
- 	//normalize_csr_edgecounts(tabfile, num_v);
+ 	if(verbose && should_normalize) Rprintf("Normalizing edge weights...\n");
+ 	if(should_normalize) normalize_csr_edgecounts(tabfile, num_v);
 
  	// temptabfile now becomes our clustering file
+ 	if(verbose) Rprintf("Clustering...\n");
  	cluster_file(tabfile, temptabfile, qfile1, qfile2, qfile3, num_v, num_iter, verbose);
 
  	// reindex the clusters from 1 to n
@@ -1297,6 +1355,7 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
 	UNPROTECT(1);
 	return RETVAL;
 }
+
 
 SEXP R_write_output_clusters(SEXP CLUSTERFILE, SEXP HASHEDDIR, SEXP OUTFILE, SEXP SEPS, SEXP VERBOSE){
 	// we're going to leverage list.files() on the R side for this so I don't have to worry
@@ -1321,7 +1380,7 @@ SEXP R_write_output_clusters(SEXP CLUSTERFILE, SEXP HASHEDDIR, SEXP OUTFILE, SEX
 	char *hashfname = malloc(PATH_MAX);
 	safe_filepath_cat(hashdir, HASH_FNAME, hashfname, PATH_MAX);
 
-	uint16_t name_len;
+	s_uint name_len;
 	char buf[MAX_NODE_NAME_SIZE];
 	char write_buf[PATH_MAX];
 	l_uint clust, num_written=0, junk;

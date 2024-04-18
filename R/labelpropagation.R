@@ -105,9 +105,13 @@ deparse_communities <- function(commPred){
 }
 
 fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
-                          mode=c("undirected", "directed"), add_self_loops=FALSE,
+                          mode=c("undirected", "directed"),
+                          add_self_loops=FALSE,
+                          ignore_weights=FALSE,
+                          normalize_weights=FALSE,
                           iterations=1L,
-                          returnTable=FALSE, verbose=TRUE,
+                          return_table=FALSE,
+                          verbose=interactive(),
                           sep='\t', linesep='\n',
                           tempfiledir=tempdir(), cleanup_files=TRUE){
   if(!is.numeric(iterations)){
@@ -115,9 +119,31 @@ fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
   } else {
     iterations <- as.integer(iterations)
   }
-  if(is.na(iterations) || is.null(iterations) || iterations < 1){
+  if(is.na(iterations) || is.null(iterations)){
     warning("Invalid value of iterations, defaulting to 1.")
     iterations <- 1L
+  }
+  if(!is.numeric(add_self_loops) && !is.logical(add_self_loops)){
+    stop("value of 'add_self_loops' should be numeric or logical")
+  }
+  if(add_self_loops < 0){
+    warning("self loops weight supplied is negative, setting to zero.")
+    add_self_loops <- 0
+  } else if(is.logical(add_self_loops)){
+    add_self_loops <- ifelse(add_self_loops, 1, 0)
+  }
+  if(!is.logical(ignore_weights)){
+    stop("ignore_weights must be logical")
+  } else if(is.na(ignore_weights) || is.null(ignore_weights)){
+    stop("invalid value for ignore_weights (should be TRUE or FALSE)")
+  }
+  if(!is.logical(normalize_weights)){
+    stop("normalize_weights must be logical")
+  } else if(is.na(normalize_weights) || is.null(normalize_weights)){
+    stop("invalid value for normalize_weights (should be TRUE or FALSE)")
+  }
+  if(ignore_weights && normalize_weights){
+    warning("Cannot both ignore weights and normalize them")
   }
   counter_cluster_binary <- tempfile(tmpdir=tempfiledir)
   csr_table_binary <- tempfile(tmpdir=tempfiledir)
@@ -151,7 +177,7 @@ fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
   # R_hashedgelist(tsv, csr, clusters, queues, hashdir, seps, 1, iter, verbose)
   .Call("R_hashedgelist", edgelistfiles, length(edgelistfiles), csr_table_binary,
         counter_cluster_binary, qfiles, hashdir, seps, ctr, iterations,
-        verbose, is_undirected, add_self_loops)
+        verbose, is_undirected, add_self_loops, ignore_weights, normalize_weights)
 
   # R_write_output_clusters(clusters, hashes, length(hashes), out_tsvpath, seps)
   .Call("R_write_output_clusters", counter_cluster_binary, hashdir,
@@ -164,7 +190,7 @@ fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
       if(file.exists(f)) file.remove(f)
     file.remove(hashdir)
   }
-  if(returnTable){
+  if(return_table){
     tab <- read.table(outfile, sep="\t")
     colnames(tab) <- c("Vertex", "Cluster")
     if(file.exists(outfile)) file.remove(outfile)
