@@ -16,9 +16,14 @@ Current implementations:
 -   Fast Label Propagation: Works for `igraph` graphs. Consensus
     clustering across weight differentials also working.
 -   Out of memory clustering: Works for arbitrary sets of edgelists
-    stored in `v1 v2 w` format. `tsv` format is preferred, but support
+    stored in `v1 v2 w` or `v1 v2` format. `tsv` format is preferred, but support
     for arbitrary encodings exists. Performance roughly matches FLP in
-    accuracy
+    accuracy.
+    
+Things I'm working on next:
+-   OOM clustering speedups: slowest operations are reading in edges and sorting
+    vertex names. I'm not yet sure how to optimize this step further.
+-   Consensus clustering for OOMLP.
 
 # Current Stats:
 
@@ -59,34 +64,32 @@ Performance is roughly identical on weighted LFR graph benchmarks
 faster than `igraph`. Most of the runtime is dedicated to converting
 `igraph`-style graphs into something I can work with; final
 implementation for `SynExtend` should be significantly faster since I
-won't be working with `igraph` graphs.
+won't be working with `igraph` graphs. **Note**: This is comparing my
+implementation of the Fast Label Propagation algorithm to the standard
+Label Propagation implemented in `igraph`. Fast Label Propagation exists
+on an `igraph` fork, but not in the distributed library.
 
 Consensus clustering runs slower than either `igraph` or my label
 propagation, mainly because multiple runs are required. This
 implementation beats `igraph` and my LP algorithm in accuracy. Runtime
-is about 10x slower because it does about 10 LP runs. Scaling on all
-algorithms is approximately linear (0.76 for my LP, 0.94 for `igraph`,
-1.33 for consensus clustering).
+is about 10x slower because it does about 10 LP runs.
 
 ## In-memory LP vs. Out-of-memory LP
 
-Testing done on MacBook Pro with M1 Pro CPU and 32GB RAM. 
-Slowest operation is currently reading in edges. This could be streamlined, but 
-I'm not yet sure where further optimizations are possible.
-
-Out of memory runtime is dominated by data preprocessing rather than the clustering
+Testing done on MacBook Pro with M1 Pro CPU and 32GB RAM. Out of memory runtime is dominated by data preprocessing rather than the clustering
 itself. For example, clustering a network with a million nodes and edges takes 107s running for a single iteration, and 129s running for infinite. 
 Consensus clustering is not yet implemented, but should require significantly less additional runtime than the in-memory implementation since subsequent OOM runs will only need to read in the graph a single time.
 
 Results below are shown for a single iteration of FLP algorithms. Running for more will increase runtime but should not meaningfully impact the memory or runtime scaling.
 
-Overall Runtime Scaling (values are exponent n for `O(x^n)`, x is number of nodes/edges):
+Computational scaling is shown below. Values are exponent `n` for `O(x^n)`, where `x` is number of nodes/edges. In all trials used for this computation, the number of nodes equals the number of edges--future investigation can look into the scaling with respect to number of nodes/edges individually rather than together.
+
 ```
-                     Runtime Scaling   Memory Scaling
-       MCL, I=2.0          1.87             0.79         
-           igraph          1.75             0.73
-machineRy,  inmem          1.19             0.87
-machineRy, outmem          1.11             0.00
+                         Runtime Scaling           Memory Scaling
+       MCL, I=2.0              1.87                     0.79         
+           igraph              1.75                     0.73
+machineRy,  inmem              1.19                     0.87
+machineRy, outmem              1.11                     0.00
 ```
 
 1,000 node graph with 8,000 edges:
