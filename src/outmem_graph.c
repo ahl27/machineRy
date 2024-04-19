@@ -30,7 +30,6 @@
  *  - consensus clustering is not yet implemented, needs ability to skip the additional csr checks
  *		-> may be worth building this out so that users can construct a graph themselves (and potentially save them)
  *	- check performance of enabling use_limited_nodes
- *	- switch to using 64-bit hash values
  *
  * Consensus Clustering sketch:
  *	1. initialize graph the normal way (run everything up to cluster_file(), including normalization)
@@ -52,7 +51,7 @@
 /*
  * common limits are defined in limits.h
  * 	PAGE_SIZE: size in bytes of a page
- *   PATH_MAX: max size in bytes of a path name
+ *  PATH_MAX: max size in bytes of a path name
  */
 
 #ifndef PATH_MAX
@@ -1291,6 +1290,21 @@ void cluster_file(const char* mastertab_fname, const char* clust_fname,
 	return;
 }
 
+void cluster_oom_single(const char* tabfile, const char* clusteroutfile, const char* dir,
+												const char* qfile1, const char* qfile2, const char* qfile3,
+												l_uint num_v, int num_iter, int verbose){
+	// runner function to cluster for a single file
+	// will be called multiple times for consensus clustering
+	if(verbose) Rprintf("Clustering...\n");
+ 	cluster_file(tabfile, clusteroutfile, qfile1, qfile2, qfile3, num_v, num_iter, verbose);
+
+ 	// reindex the clusters from 1 to n
+ 	mergesort_clust_file(clusteroutfile, dir, sizeof(double_lu), l_uint_compar, precopy_dlu1, postcopy_dlu1);
+ 	mergesort_clust_file(clusteroutfile, dir, sizeof(double_lu), l_uint_compar, precopy_dlu2, postcopy_dlu2);
+
+	return;
+}
+
 
 SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNAME, SEXP QFILES, SEXP OUTDIR, // files
 										SEXP SEPS, SEXP CTR, SEXP ITER, SEXP VERBOSE, // control flow
@@ -1370,12 +1384,9 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
  	if(should_normalize) normalize_csr_edgecounts(tabfile, num_v);
 
  	// temptabfile now becomes our clustering file
- 	if(verbose) Rprintf("Clustering...\n");
- 	cluster_file(tabfile, temptabfile, qfile1, qfile2, qfile3, num_v, num_iter, verbose);
 
- 	// reindex the clusters from 1 to n
- 	mergesort_clust_file(temptabfile, dir, sizeof(double_lu), l_uint_compar, precopy_dlu1, postcopy_dlu1);
- 	mergesort_clust_file(temptabfile, dir, sizeof(double_lu), l_uint_compar, precopy_dlu2, postcopy_dlu2);
+ 	// for now just runs cluster_oom_single, eventually consensus mapping goes here
+ 	cluster_oom_single(tabfile, temptabfile, dir, qfile1, qfile2, qfile3, num_v, num_iter, verbose);
 
  	free(hashfile);
  	free(hashindex);
@@ -1387,9 +1398,6 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
 
 
 SEXP R_write_output_clusters(SEXP CLUSTERFILE, SEXP HASHEDDIR, SEXP OUTFILE, SEXP SEPS, SEXP VERBOSE){
-	// we're going to leverage list.files() on the R side for this so I don't have to worry
-	// about platform-specific file handling for directory parsing
-
 	/*
 	 * Inputs:
 	 * 	CLUSTERFILE: file of clusters (cluster_counts)
