@@ -15,7 +15,11 @@
  *		 						 outgoing edges from the first vertex are the first 100 edge entries (0-99).
  *  - outfile.tsv: .tsv file returned to R, contains two tab-separated columns (vertex name, cluster)
  *
- * Additional notes and TODOs:
+ * Additional Notes:
+ *  - sizeof(char) is guaranteed to be 1 (see https://en.wikipedia.org/wiki/Sizeof). 1 is used instead to
+ *		eliminate the extra function call and simplify code somewhat.
+ *
+ * TODOs:
  *	- At some point it's probably worth refactoring all file accesses into some kind of struct w/ accessors
  *  	-> something like a virtual array object that's actually r/w to disk, could be useful in future
  *		-> this implementation should use mmap (and Windows equivalent when necessary) to improve random r/w
@@ -23,17 +27,25 @@
  *  - Error checking needs to be improved
  *		-> no checks to ensure the edgelists are formatted the way the user claims
  *		-> make sure weights exist and are parseable
- * 		-> remove cases where double separators are used (skip 0-length names)
- *  - sizeof(char) is guaranteed to be 1 (see https://en.wikipedia.org/wiki/Sizeof). 1 is used instead to
- *		eliminate the extra function call and simplify code somewhat.
  *  - consensus clustering is not yet implemented, needs ability to skip the additional csr checks
  *		-> may be worth building this out so that users can construct a graph themselves (and potentially save them)
- *  - check functionality of add_self_loops and normalize_edge_counts
+ *	- check performance of enabling use_limited_nodes
+ *	- switch to using 64-bit hash values
+ *
+ * Consensus Clustering sketch:
+ *	1. initialize graph the normal way (run everything up to cluster_file(), including normalization)
+ *	2. copy CSR graph into master list file, setting all weights to 0
+ *	3. copy CSR graph into a temp file, applying a weight transformation to each node (do we renormalize?)
+ *	4. run cluster_file() on this temp file to get a clustering
+ *	5. for edge in master list file, add 1/num_iterations if the nodes in the same cluster
+ *  6. repeat (2-4) for all weight transformations, use same master cluster file for each
+ *	7. trim weight 0 edges from master_list
+ *  7. run cluster_file() on master list file
  */
 
 #include "machineRy.h"
 
-#define s_uint uint16_t
+#define h_uint uint64_t
 #define uint uint32_t
 #define l_uint uint64_t
 
@@ -54,11 +66,9 @@
 #define MAX_NODE_NAME_SIZE 254 // max size of a vertex name (char array will have 2 extra spaces for terminator and flag)
 #define NODE_NAME_CACHE_SIZE 4096
 #define FILE_READ_CACHE_SIZE 4096 // used for mergesorting files
-#define PREFIX_LENGTH 4 // size of prefix used for cached vertex lookup
 
-const char DELIM = 23; // 23 = end of transmission block, not really used for anything nowadays
 const int L_SIZE = sizeof(l_uint);
-const int LEN_SIZE = sizeof(s_uint);
+const int LEN_SIZE = sizeof(h_uint);
 const int MAX_READ_RETRIES = 10;
 const char HASH_FNAME[] = "hashfile";
 const char HASH_INAME[] = "hashindex";
@@ -67,7 +77,7 @@ const char CONS_TMPNAME[] = "tmpgraph";
 // set this to 1 if we should sample edges rather than use all of them
 const int use_limited_nodes = 0;
 const l_uint MAX_EDGES_EXACT = 20000; // this is a soft cap -- if above this, we sample edges probabalistically
-const int PRINT_COUNTER_MOD = 173;
+const int PRINT_COUNTER_MOD = 811;
 const int PROGRESS_COUNTER_MOD = 3083;
 
 
@@ -80,9 +90,9 @@ typedef struct {
 } double_lu;
 
 typedef struct {
-	s_uint strlength;
+	h_uint strlength;
 	char s[MAX_NODE_NAME_SIZE];
-	s_uint hash;
+	h_uint hash;
 	l_uint count;
 } msort_vertex_line;
 
@@ -93,8 +103,8 @@ typedef struct ll {
 } ll;
 
 typedef struct {
-	s_uint len;
-	s_uint hash;
+	h_uint len;
+	h_uint hash;
 	l_uint index;
 } iline;
 
@@ -170,26 +180,43 @@ void errorclose_file(FILE *f1, FILE *f2, const char* message){
 	error("%s", message);
 }
 
-s_uint hash_string_fnv(const char *str){
+h_uint hash_string_fnv32(const char *str){
 	/*
 	 * this is a Fowler-Noll-Vo hash function, it's fast and simple -- see wikipedia for constants
 	 * https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
 	 *
-	 * hashes to a 32-bit uint that we truncate to 16 bit for s_uint
+	 * hashes to a 32-bit uint that we can truncate
 	*/
 	const uint fnv_prime = 0x01000193;
-	uint hash = 0x811c9dc5;
+	uint32_t hash = 0x811c9dc5;
 	const char *s = str;
 	char tmp;
 
 	while(*s){
 		tmp = *s++;
-		hash *= fnv_prime;
 		hash ^= tmp;
+		hash *= fnv_prime;
 	}
 
-	// XOR fold to 16 bits
-	hash = (hash & 0x0000FFFF) ^ ((hash & 0xFFFF0000) >> 16);
+	return (h_uint)hash;
+}
+
+h_uint hash_string_fnv(const char *str){
+	/*
+	 * Same as above, just hashes to a 64-bit uint
+	 * only use this if h_uint = uint64_t, otherwise just stick to the 32 bit version (faster)
+	*/
+	const uint64_t fnv_prime = 0xcbf29ce484222325;
+	uint64_t hash = 0x100000001b3;
+	const char *s = str;
+	char tmp;
+
+	while(*s){
+		tmp = *s++;
+		hash ^= tmp;
+		hash *= fnv_prime;
+	}
+
 	return hash;
 }
 
@@ -221,7 +248,7 @@ int vertex_name_hash_compar(const void* a, const void* b){
 	if(aa->strlength != bb->strlength)
 		return aa->strlength - bb->strlength;
 	if(aa->hash != bb->hash)
-		return aa->hash - bb->hash;
+		return aa->hash < bb->hash ? -1 : 1;
 	return strcmp(aa->s, bb->s);
 }
 
@@ -567,7 +594,7 @@ void batch_write_nodes(char **names, int num_to_sort, FILE *f){
 	l_uint tmpcount;
 
 	// strlens
-	s_uint cur_len;
+	h_uint cur_len;
 
 	// these are sometimes used for temp storage
 	int insert_point;
@@ -649,10 +676,10 @@ l_uint lookup_node_index(char *name, FILE *findex, FILE *fhash, l_uint num_v){
 
 	// findex and hashf should be opened rb
 	const size_t line_size = sizeof(iline);
-	const s_uint namelen = strlen(name);
+	const h_uint namelen = strlen(name);
 
-	s_uint tmplen;
-	s_uint curhash = hash_string_fnv(name);
+	h_uint tmplen;
+	h_uint curhash = hash_string_fnv(name);
 	int cmpresult;
 
 	l_uint min_line = 0, max_line = num_v;
@@ -668,7 +695,9 @@ l_uint lookup_node_index(char *name, FILE *findex, FILE *fhash, l_uint num_v){
 		fseek(findex, (cur_line-prev_line)*line_size, SEEK_CUR);
 
 		safe_fread(index_line, sizeof(iline), 1, findex);
-		cmpresult = curhash - index_line->hash;
+		cmpresult = curhash != index_line->hash; // should be 0 when equal
+		if(cmpresult)
+			cmpresult = curhash < index_line->hash ? -1 : 1;
 		if(index_line->len == namelen && !cmpresult){
 			memset(vname, 0, MAX_NODE_NAME_SIZE);
 			fseek(fhash, index_line->index, SEEK_SET);
@@ -1380,7 +1409,7 @@ SEXP R_write_output_clusters(SEXP CLUSTERFILE, SEXP HASHEDDIR, SEXP OUTFILE, SEX
 	char *hashfname = malloc(PATH_MAX);
 	safe_filepath_cat(hashdir, HASH_FNAME, hashfname, PATH_MAX);
 
-	s_uint name_len;
+	h_uint name_len;
 	char buf[MAX_NODE_NAME_SIZE];
 	char write_buf[PATH_MAX];
 	l_uint clust, num_written=0, junk;
