@@ -75,9 +75,19 @@ Slowest operation is currently reading in edges. This could be streamlined, but
 I'm not yet sure where further optimizations are possible.
 
 Out of memory runtime is dominated by data preprocessing rather than the clustering
-itself. Consensus clustering is not yet implemented, but should require significantly
-less additional runtime than the in-memory implementation since subsequent OOM 
-runs will not need to duplicate this effort.
+itself. For example, clustering a network with a million nodes and edges takes 107s running for a single iteration, and 129s running for infinite. 
+Consensus clustering is not yet implemented, but should require significantly less additional runtime than the in-memory implementation since subsequent OOM runs will only need to read in the graph a single time.
+
+Results below are shown for a single iteration of FLP algorithms. Running for more will increase runtime but should not meaningfully impact the memory or runtime scaling.
+
+Overall Runtime Scaling (values are exponent n for `O(x^n)`, x is number of nodes/edges):
+```
+                     Runtime Scaling   Memory Scaling
+       MCL, I=2.0          1.87             0.79         
+           igraph          1.75             0.73
+machineRy,  inmem          1.19             0.87
+machineRy, outmem          1.11             0.00
+```
 
 1,000 node graph with 8,000 edges:
 

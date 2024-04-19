@@ -109,19 +109,22 @@ fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
                           add_self_loops=FALSE,
                           ignore_weights=FALSE,
                           normalize_weights=FALSE,
-                          iterations=1L,
+                          iterations=0L,
                           return_table=FALSE,
                           verbose=interactive(),
                           sep='\t', linesep='\n',
                           tempfiledir=tempdir(), cleanup_files=TRUE){
   if(!is.numeric(iterations)){
-    stop("iterations must be a positive integer or numeric.")
+    stop("iterations must be an integer or numeric.")
   } else {
     iterations <- as.integer(iterations)
   }
   if(is.na(iterations) || is.null(iterations)){
-    warning("Invalid value of iterations, defaulting to 1.")
-    iterations <- 1L
+    warning("Invalid value of iterations, defaulting to 0.")
+    iterations <- 0L
+  }
+  if(is.infinite(iterations) || iterations < 0){
+    iterations <- 0L
   }
   if(!is.numeric(add_self_loops) && !is.logical(add_self_loops)){
     stop("value of 'add_self_loops' should be numeric or logical")
