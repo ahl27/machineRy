@@ -99,6 +99,7 @@ machineRy, outmem             23.3                      3.1
 100,000 node graph with 100,000 edges:
 ```         
                       Memory Usage (Max, MB)   Total Elapsed Time (sec)
+       MCL, I=2.0            105.0                      6.7
            igraph             62.7                      1.3
 machineRy,  inmem            106.1                      0.8
 machineRy, outmem             65.9                      9.0
@@ -107,6 +108,7 @@ machineRy, outmem             65.9                      9.0
 250,000 node graph with 250,000 edges:
 ```         
                       Memory Usage (Max, MB)   Total Elapsed Time (sec)
+       MCL, I=2.0            262.0                     26.8
            igraph            123.0                      5.3
 machineRy,  inmem            197.1                      1.6
 machineRy, outmem             84.2                     23.9
@@ -116,6 +118,7 @@ machineRy, outmem             84.2                     23.9
 1,000,000 node graph with 1,000,000 edges:
 ```         
                       Memory Usage (Max, MB)   Total Elapsed Time (min:sec)
+       MCL, I=2.0            778.9                     5:03.2
            igraph            416.6                     1:15.6
 machineRy,  inmem            756.9                     0:06.3
 machineRy, outmem            103.5                     1:37.0
@@ -124,6 +127,7 @@ machineRy, outmem            103.5                     1:37.0
 10,000,000 node graph with 10,000,000 edges:
 ```         
                       Memory Usage (Max, GB)   Total Elapsed Time (hr:min:sec)
+       MCL, I=2.0             4.20                     7:15:45
            igraph             1.77                     1:07:10
 machineRy,  inmem             5.57                     0:01:26
 machineRy, outmem             0.08                     0:23:52

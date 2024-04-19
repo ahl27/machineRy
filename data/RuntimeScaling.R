@@ -1,3 +1,7 @@
+# Local results using `time`
+# columns are igraph, in-memLP, OOMLP, MCL I2.0
+# note that LP are both doing a single iteration
+#   so runtimes slightly better than will be expected
 RuntimeResults <- rbind(
   c(0.20,0.18,0.23),
   c(0.18,0.19,0.26),
@@ -28,7 +32,7 @@ USE_LAST_ROWS <- 5L
 to_use <- seq(nrow(RuntimeResults)-USE_LAST_ROWS, nrow(RuntimeResults))
 
 if(interactive()){
-  plot(NULL, xlim=c(1,max(RuntimeResults[,1])), ylim=c(1, max(RuntimeResults[,-1],na.rm=T)),
+  plot(NULL, xlim=c(10000,max(RuntimeResults[,1])), ylim=c(1, max(RuntimeResults[,-1],na.rm=T)),
        log='yx', xlab='num vertices and edges', ylab='runtime (seconds)')
   for(i in seq_len(3)){
     lines(x=RuntimeResults[,1], y=RuntimeResults[,1+i],col=i)
