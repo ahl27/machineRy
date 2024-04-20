@@ -1,3 +1,7 @@
+# Version 0.5
+* Adds consensus clustering for OOMLP
+* Preparing code to add to SynExtend package
+
 # Version 0.4
 * Adds edge normalization for OOMLP
 * Significant performance enhancements to OOMLP

@@ -15,8 +15,9 @@ fastlabel_oom(edgelistfiles, outfile=tempfile(),
               normalize_weights=FALSE,
               iterations=0L,
               return_table=FALSE,
+              consensus_cluster=FALSE,
               verbose=interactive(),
-              sep='\t', linesep='\n',
+              sep='\t',
               tempfiledir=tempdir(),
               cleanup_files=TRUE)
 }
@@ -54,16 +55,16 @@ Number of iterations to run fast label propagation algorithm for. Set to a value
 Should result of clustering be returned as a file, or a \code{data.frame} object? If \code{FALSE}, returns a character vector corresponding to the path of \code{outfile}. If \code{TRUE}, parses \code{outfile} using \code{\link{read.table}} and returns the result. Not recommended for very large graphs.
 }
 
+\item{consensus_cluster}{
+Should consensus clustering be used? If \code{TRUE}, runs the clustering algorithm nine times and forms a consensus clustering based on the agreement of each run. Can be set to a double to control the number of iterations, see Details for more information.
+}
+
 \item{verbose}{
 Should status messages (output, progress, etc.) be displayed while running?
 }
 
 \item{sep}{
 Character that separates entries on a line in each file in \code{edgelistfiles}. Defaults to tab, as would be expected in a \code{.tsv} formatted file. Set to \code{','} for a \code{.csv} file.
-}
-
-\item{linesep}{
-Character that separates lines in each file in \code{edgelistfiles}. Defaults to a newline, but can be set to any arbitrary character if you have specially formatted files.
 }
 \item{tempfiledir}{
 Character vector corresponding to the location where temporary files used during execution should be stored. Defaults to R's \code{\link{tempdir}}.
@@ -82,11 +83,13 @@ This function expects a set of edge list files. Each entry in the file is expect
 
 This line defines a single edge between vertices \code{VERTEX1} and \code{VERTEX2} with weight \code{WEIGHT}. \code{VERTEX1} and \code{VERTEX2} are strings corresponding to vertex names, \code{WEIGHT} is a numeric value that can be interpreted as a \code{double}. The separators \code{<sep>} and \code{<linesep>} correspond to the arguments \code{sep} and \code{linesep}, respectively. The default arguments work for standard \code{.tsv} formatting, i.e., a file of three columns of tab-separated values.
 
-If \code{ignore_weight=FALSE}, the file can be formatted as:
+If \code{ignore_weight=TRUE}, the file can be formatted as:
 
 \code{VERTEX1<sep>VERTEX2<linesep>}
 
-Note that the \code{v1 v2 w} format is still accepted for \code{ignore_weight=TRUE}, but the specified weights will be ignored.
+Note that the \code{v1 v2 w} format is still accepted for \code{ignore_weight=FALSE}, but the specified weights will be ignored.
+
+Consensus clustering can be enabled by setting \code{consensus_cluster=TRUE}. Consensus clustering runs this algorithm on the graph multiple times, transforming weight values according to a sigmoid function. By default, this runs nine times for sigmoids with scale 0.5 and shape \code{c(0,0.2,0.4,0.6,0.8,1.0,1.33,1.67,2.0)}, collapsing weights below 0.1 to zero. The resulting clusters form a network such that the edge weight between any two nodes connected in the initial graph is the proportion of clusters they shared over clustering runs. This network is used for a final label propagation run, which identifies the consensus clusters. Users can specify a numeric vector as input to \code{consensus_cluster}, which will override the default shape parameters and number of iterations.
 }
 \value{
 If \code{return_table=TRUE}, returns a \code{\link{data.frame}} object with two columns. The first column contains the name of each vertex, and the second column contains the cluster it was assigned to.

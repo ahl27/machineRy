@@ -72,6 +72,9 @@ const int MAX_READ_RETRIES = 10;
 const char HASH_FNAME[] = "hashfile";
 const char HASH_INAME[] = "hashindex";
 const char CONS_TMPNAME[] = "tmpgraph";
+const char CONSENSUS_CSRCOPY1[] = "tmpcsr1";
+const char CONSENSUS_CSRCOPY2[] = "tmpcsr2";
+const char CONSENSUS_CLUSTER[] = "tmpclust";
 
 // set this to 1 if we should sample edges rather than use all of them
 const int use_limited_nodes = 0;
@@ -177,6 +180,14 @@ void errorclose_file(FILE *f1, FILE *f2, const char* message){
 	fclose(f1);
 	if(f2) fclose(f2);
 	error("%s", message);
+}
+
+inline double sigmoid_transform(double w, const double slope){
+	// should probably expose these at some point
+	const double scale = 0.5;
+	const double cutoff = 0.2;
+	double r = 1 / (1+exp(-1*slope*(w-scale)));
+	return r > cutoff ? r : 0;
 }
 
 h_uint hash_string_fnv32(const char *str){
@@ -540,6 +551,50 @@ void mergesort_clust_file(const char* f, const char* dir, size_t element_size,
 	return;
 }
 
+void copy_csrfile_sig(const char* dest, const char* src, l_uint num_v, const double w){
+	l_uint *vbuf = malloc(FILE_READ_CACHE_SIZE*L_SIZE);
+	double *wbuf = malloc(FILE_READ_CACHE_SIZE*sizeof(double));
+	FILE *fd = fopen(dest, "wb");
+	FILE *fs = fopen(src, "rb");
+
+	int to_read=0, remaining=num_v+1;
+
+	// first copy over all the vertex offsets
+	while(remaining > 0){
+		to_read = remaining > FILE_READ_CACHE_SIZE ? FILE_READ_CACHE_SIZE : remaining;
+		remaining -= fread(vbuf, L_SIZE, to_read, fs);
+		fwrite(vbuf, L_SIZE, to_read, fd);
+	}
+
+	// next copy over vertices and weights
+	int cachectr = 0;
+	while(fread(&vbuf[cachectr], L_SIZE, 1, fs)){
+		fread(&wbuf[cachectr], sizeof(double), 1, fs);
+		cachectr++;
+		if(cachectr == FILE_READ_CACHE_SIZE){
+			for(int i=0; i<cachectr; i++){
+				wbuf[i] = w < 0 ? 0 : sigmoid_transform(wbuf[i], w);
+				fwrite(&vbuf[i], L_SIZE, 1, fd);
+				fwrite(&wbuf[i], sizeof(double), 1, fd);
+			}
+			cachectr = 0;
+		}
+	}
+	if(cachectr){
+		for(int i=0; i<cachectr; i++){
+			wbuf[i] = w < 0 ? 0 : sigmoid_transform(wbuf[i], w);
+			fwrite(&vbuf[i], L_SIZE, 1, fd);
+			fwrite(&wbuf[i], sizeof(double), 1, fd);
+		}
+	}
+
+	free(vbuf);
+	free(wbuf);
+	fclose(fd);
+	fclose(fs);
+	return;
+}
+
 void unique_strings_with_sideeffects(char **names, int num_to_sort, int *InsertPoint, uint *counts, int useCounts){
 	/*
 	 * This code is duplicated a lot, so just putting it here for consistency
@@ -880,6 +935,9 @@ void normalize_csr_edgecounts(const char* ftable, l_uint num_v){
 		// now we're at the entry at (end), need to move back to start
 		// that means moving back (end+start) spaces
 		fseek(mastertab, -1*entry_size*(end-start), SEEK_CUR);
+
+		// guard case where all weights sum to 0
+		if(!normalizer) normalizer = 1;
 
 		// finally we overwrite each of the values
 		for(l_uint j=0; j<(end-start); j++){
@@ -1290,12 +1348,54 @@ void cluster_file(const char* mastertab_fname, const char* clust_fname,
 	return;
 }
 
+void resolve_cluster_consensus(FILE *csr, const char* clustername, l_uint num_v, const double nclust){
+	// remember that the csr file has num_v+1 entries, meaning they are at locations (0 -> num_v)
+	const size_t entry_size = L_SIZE + sizeof(double);
+	const double to_add = 1/nclust;
+	FILE *clustf = fopen(clustername, "rb");
+
+	l_uint start=0, end=0, pair, cur_clust, tmp_clust;
+	double w;
+
+	// iterate over all nodes
+	for(l_uint i=0; i<num_v-1; i++){
+		// rewind files to known location, read node data (end index, cluster number)
+		fseek(csr, (i+1)*L_SIZE, SEEK_SET);
+		safe_fread(&end, L_SIZE, 1, csr);
+
+		fseek(clustf, i*L_SIZE, SEEK_SET);
+		safe_fread(&cur_clust, L_SIZE, 1, clustf);
+
+		// advance csr to the beginning of the edge block (see normalize_csr_edgecounts for this math)
+		fseek(csr, (num_v-i-1)*L_SIZE, SEEK_CUR);
+		fseek(csr, start*entry_size, SEEK_CUR);
+		for(l_uint j=0; j<(end-start); j++){
+			safe_fread(&pair, L_SIZE, 1, csr);
+			safe_fread(&w, sizeof(double), 1, csr);
+			fseek(clustf, pair*L_SIZE, SEEK_SET);
+			safe_fread(&tmp_clust, L_SIZE, 1, clustf);
+			if(tmp_clust == cur_clust){
+				// if clusters are the same, add the increment to the value
+				w += to_add;
+				fseek(csr, -1*sizeof(double), SEEK_CUR);
+				fwrite(&w, sizeof(double), 1, csr);
+			}
+		}
+		start = end;
+	}
+
+	fclose(clustf);
+}
+
 void cluster_oom_single(const char* tabfile, const char* clusteroutfile, const char* dir,
 												const char* qfile1, const char* qfile2, const char* qfile3,
-												l_uint num_v, int num_iter, int verbose){
+												l_uint num_v, int num_iter, int verbose, int is_consensus){
 	// runner function to cluster for a single file
 	// will be called multiple times for consensus clustering
-	if(verbose) Rprintf("Clustering...\n");
+	if(verbose){
+		if(is_consensus) Rprintf("\tClustering...\n");
+		else Rprintf("Clustering...\n");
+	}
  	cluster_file(tabfile, clusteroutfile, qfile1, qfile2, qfile3, num_v, num_iter, verbose);
 
  	// reindex the clusters from 1 to n
@@ -1306,9 +1406,64 @@ void cluster_oom_single(const char* tabfile, const char* clusteroutfile, const c
 }
 
 
+void consensus_cluster_oom(const char* csrfile, const char* clusteroutfile, const char* dir,
+													 const char* qfile1, const char* qfile2, const char* qfile3,
+													 l_uint num_v, int num_iter, int v,
+ 													 const double* consensus_weights, const int consensus_len){
+	char* tmpcsrfilename1 = malloc(PATH_MAX);
+	char* tmpcsrfilename2 = malloc(PATH_MAX);
+	char* tmpclusterfile = malloc(PATH_MAX);
+	safe_filepath_cat(dir, CONSENSUS_CSRCOPY1, tmpcsrfilename1, PATH_MAX);
+	safe_filepath_cat(dir, CONSENSUS_CSRCOPY2, tmpcsrfilename2, PATH_MAX);
+	safe_filepath_cat(dir, CONSENSUS_CLUSTER, tmpclusterfile, PATH_MAX);
+
+	FILE *dummyclust, *consensuscsr;
+	l_uint *zeroclust = calloc(FILE_READ_CACHE_SIZE, num_v);
+	int ntw;
+
+	// tmpcsrfilename2 is going to store the final consensus weights
+	copy_csrfile_sig(tmpcsrfilename2, csrfile, num_v, -1);
+
+	consensuscsr = fopen(tmpcsrfilename2, "rb+");
+	// now we run clustering over consensus_len times
+	for(int i=0; i<consensus_len; i++){
+		if(v) Rprintf("Iteration %d of %d:\n", i+1, consensus_len);
+
+		// create csr copy with transformed weights
+		if(v) Rprintf("\tTransforming edge weights...\n");
+		copy_csrfile_sig(tmpcsrfilename1, csrfile, num_v, consensus_weights[i]);
+
+		// set up a dummy cluster file
+		dummyclust = fopen(tmpclusterfile, "wb");
+		ntw = num_v;
+		while(ntw > 0)
+			ntw -= fwrite(zeroclust, L_SIZE, ntw > FILE_READ_CACHE_SIZE ? FILE_READ_CACHE_SIZE : ntw, dummyclust);
+		fclose(dummyclust);
+
+		// cluster into dummyclust
+		cluster_oom_single(tmpcsrfilename1, tmpclusterfile, dir, qfile1, qfile2, qfile3, num_v, num_iter, v, 1);
+
+		// lastly, add edge to consensus csr file if they're the same cluster
+		resolve_cluster_consensus(consensuscsr, tmpclusterfile, num_v, consensus_len);
+	}
+	fclose(consensuscsr);
+
+	if(v) Rprintf("Clustering on consensus data...\n");
+	cluster_oom_single(tmpcsrfilename2, clusteroutfile, dir, qfile1, qfile2, qfile3, num_v, num_iter, v, 1);
+
+	free(tmpcsrfilename1);
+	free(tmpcsrfilename2);
+	free(tmpclusterfile);
+	free(zeroclust);
+	return;
+}
+
+
 SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNAME, SEXP QFILES, SEXP OUTDIR, // files
 										SEXP SEPS, SEXP CTR, SEXP ITER, SEXP VERBOSE, // control flow
-										SEXP IS_UNDIRECTED, SEXP ADD_SELF_LOOPS, SEXP IGNORE_WEIGHTS, SEXP NORMALIZE_WEIGHTS){ //optional adjustments
+										SEXP IS_UNDIRECTED, SEXP ADD_SELF_LOOPS, // optional adjustments
+										SEXP IGNORE_WEIGHTS, SEXP NORMALIZE_WEIGHTS,
+										SEXP CONSENSUS_WEIGHTS){
 	/*
 	 * I always forget how to handle R strings so I'm going to record it here
 	 * R character vectors are STRSXPs, which is the same as a list (VECSXP)
@@ -1328,23 +1483,34 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
 	 * R_hashedgelist(tsv, csr, clusters, queues, hashdir, seps, 1, iter, verbose)
 	 */
 
+	// main files
 	const char* dir = CHAR(STRING_ELT(OUTDIR, 0));
 	const char* edgefile;
 	const char* tabfile = CHAR(STRING_ELT(TABNAME, 0));
 	const char* temptabfile = CHAR(STRING_ELT(TEMPTABNAME, 0));
-	const char* seps = CHAR(STRING_ELT(SEPS, 0));
+
+	// queue files
 	const char* qfile1 = CHAR(STRING_ELT(QFILES, 0));
 	const char* qfile2 = CHAR(STRING_ELT(QFILES, 1));
 	const char* qfile3 = CHAR(STRING_ELT(QFILES, 2));
+
+	// required parameters
+	const char* seps = CHAR(STRING_ELT(SEPS, 0));
 	const int num_edgefiles = INTEGER(NUM_EFILES)[0];
 	const int num_iter = INTEGER(ITER)[0];
 	const int verbose = LOGICAL(VERBOSE)[0];
-	const int is_undirected = LOGICAL(IS_UNDIRECTED)[0];
 	l_uint num_v = (l_uint)(REAL(CTR)[0]);
+
+	// optional parameters
+	const int is_undirected = LOGICAL(IS_UNDIRECTED)[0];
 	const double self_loop_weight = REAL(ADD_SELF_LOOPS)[0];
 	const int add_self_loops = self_loop_weight > 0;
 	const int should_normalize = LOGICAL(NORMALIZE_WEIGHTS)[0];
 	const int ignore_weights = LOGICAL(IGNORE_WEIGHTS)[0];
+
+	// consensus stuff
+	const int consensus_len = length(CONSENSUS_WEIGHTS);
+	const double* consensus_w = REAL(CONSENSUS_WEIGHTS);
 
 	// eventually let's just make these tempfiles too called by R
 	char *hashfile = malloc(PATH_MAX);
@@ -1381,12 +1547,15 @@ SEXP R_hashedgelist(SEXP FILENAME, SEXP NUM_EFILES, SEXP TABNAME, SEXP TEMPTABNA
  	if(add_self_loops) add_self_loops_to_csrfile(tabfile, num_v, self_loop_weight);
 
  	if(verbose && should_normalize) Rprintf("Normalizing edge weights...\n");
- 	if(should_normalize) normalize_csr_edgecounts(tabfile, num_v);
+	if(should_normalize) normalize_csr_edgecounts(tabfile, num_v);
 
- 	// temptabfile now becomes our clustering file
+ 	if(consensus_len){
+ 		consensus_cluster_oom(tabfile, temptabfile, dir, qfile1, qfile2, qfile3, num_v, num_iter, verbose,
+ 													consensus_w, consensus_len);
 
- 	// for now just runs cluster_oom_single, eventually consensus mapping goes here
- 	cluster_oom_single(tabfile, temptabfile, dir, qfile1, qfile2, qfile3, num_v, num_iter, verbose);
+ 	} else {
+ 		cluster_oom_single(tabfile, temptabfile, dir, qfile1, qfile2, qfile3, num_v, num_iter, verbose, 0);
+ 	}
 
  	free(hashfile);
  	free(hashindex);

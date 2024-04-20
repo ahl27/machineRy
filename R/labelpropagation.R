@@ -111,8 +111,9 @@ fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
                           normalize_weights=FALSE,
                           iterations=0L,
                           return_table=FALSE,
+                          consensus_cluster=FALSE,
                           verbose=interactive(),
-                          sep='\t', linesep='\n',
+                          sep='\t',
                           tempfiledir=tempdir(), cleanup_files=TRUE){
   if(!is.numeric(iterations)){
     stop("iterations must be an integer or numeric.")
@@ -148,6 +149,32 @@ fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
   if(ignore_weights && normalize_weights){
     warning("Cannot both ignore weights and normalize them")
   }
+  # verify that the first few lines of each file are correct
+  if(!all(file.exists(edgelistfiles))) stop("edgelist file does not exist")
+  edgelistfiles <- normalizePath(edgelistfiles, mustWork=TRUE)
+  for(f in edgelistfiles){
+    v <- readLines(f, n=10L)
+    v <- strsplit(v, sep)
+    lv <- lengths(v)
+    if(any(lv != lv[1]) || lv[1] < 2) stop("file ", f, " is misformatted")
+    lv <- lv[1] # now we know they're all the same
+    if(!ignore_weights && lv == 2) stop("file ", f, " is missing weights!")
+    if(!ignore_weights && any(vapply(v, \(x) is.na(as.numeric(x[3])), logical(1L))))
+      stop("file ", f, " has malformed weights")
+  }
+
+  if(is.logical(consensus_cluster)){
+    if(consensus_cluster){
+      consensus_cluster <- c(0,0.2,0.4,0.6,0.8,1,1.33,1.67,2)
+    } else {
+      consensus_cluster <- numeric(0L)
+    }
+  } else {
+    if(!is.numeric(consensus_cluster) || any(is.na(consensus_cluster) | is.null(consensus_cluster)))
+      stop("'consensus_cluster' must be a logical or numeric vector")
+    if(any(consensus_cluster < 0))
+      stop("'consensus_cluster' cannot contain negative values")
+  }
   counter_cluster_binary <- tempfile(tmpdir=tempfiledir)
   csr_table_binary <- tempfile(tmpdir=tempfiledir)
   qfiles <- c(tempfile(tmpdir=tempfiledir),
@@ -173,14 +200,13 @@ fastlabel_oom <- function(edgelistfiles, outfile=tempfile(),
     cat("\tHashes: ", basename(hashdir), "\n")
   }
 
-  seps <- paste(sep, linesep, sep='')
+  seps <- paste(sep, "\n", sep='')
   ctr <- 1
-  if(!all(file.exists(edgelistfiles))) stop("edgelist file does not exist")
-  edgelistfiles <- normalizePath(edgelistfiles, mustWork=TRUE)
   # R_hashedgelist(tsv, csr, clusters, queues, hashdir, seps, 1, iter, verbose)
   .Call("R_hashedgelist", edgelistfiles, length(edgelistfiles), csr_table_binary,
         counter_cluster_binary, qfiles, hashdir, seps, ctr, iterations,
-        verbose, is_undirected, add_self_loops, ignore_weights, normalize_weights)
+        verbose, is_undirected, add_self_loops, ignore_weights, normalize_weights,
+        consensus_cluster)
 
   # R_write_output_clusters(clusters, hashes, length(hashes), out_tsvpath, seps)
   .Call("R_write_output_clusters", counter_cluster_binary, hashdir,
