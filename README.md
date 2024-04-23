@@ -18,7 +18,7 @@ Current implementations:
 -   Out of memory clustering: Works for arbitrary sets of edgelists
     stored in `v1 v2 w` or `v1 v2` format. `tsv` format is preferred, but support
     for arbitrary encodings exists. Performance roughly matches FLP in
-    accuracy. \[Final version implemented in [SynExtend](https://github.com/npcooley/SynExtend/pull/45)\]
+    accuracy. **\[Final version implemented in [SynExtend](https://github.com/npcooley/SynExtend/pull/45)\]**
     
 Things I'm working on next:
 -   OOM clustering speedups: slowest operations are reading in edges and sorting
