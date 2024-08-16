@@ -69,7 +69,7 @@ fast_convert_igraph <- function(g, add_self_loop=FALSE){
   list(graph=prelim_g, vnames=vertex_names)
 }
 
-LP_igraph <- function(g, max_iterations, add_self_loop=FALSE, consensus=FALSE){
+LP_igraph <- function(g, max_iterations=Inf, add_self_loop=FALSE, consensus=FALSE){
   elg <- fast_convert_igraph(g, add_self_loop)
   el <- elg$graph
   elvn <- elg$vnames

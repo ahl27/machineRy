@@ -210,11 +210,55 @@ contains
       mloc = maxloc(gains, dim=1)
       o_v = v(mloc)
       o_gini_score = gains(mloc)
-      else
-        ! otherwise, use simulated annealing
-        call find_gini_sim_anneal(v, response, l, nclass, tempmax, o_v, tmpscore)
-        o_gini_score = total_gini - tmpscore
+    else
+      ! otherwise, use simulated annealing
+      call find_gini_sim_anneal(v, response, l, nclass, tempmax, o_v, tmpscore)
+      o_gini_score = total_gini - tmpscore
     end if
   end subroutine find_gini_split
+
+  subroutine find_sse_split(v, response, l, o_v, o_sse_score) bind(C, name="find_sse_split_")
+    ! scores here are DOUBLES
+    ! SSE calculation is much easier than gini
+    use, intrinsic :: iso_c_binding, only: c_int, c_double
+    implicit none
+
+    integer(c_int), intent(in) :: l
+    real(c_double), intent(in) :: v(l), response(l)
+    real(c_double), intent(out) :: o_sse_score, o_v
+
+    ! local variables
+    integer(c_int) :: i, j, mloc, tempmax
+    real(c_double) :: total_sse, gains(l), tmpscore, lmean, rmean
+    logical :: tmpmask(l)
+
+    tempmax = 10
+
+    ! original sse is just the mean squared error
+    total_sse = sum(((response - sum(response)/l))**2)
+
+    ! naive implementation first, simulated annealing later
+    gains(:) = total_sse
+    do i=1, l
+      tmpmask(:) = v <= v(i)
+      j = count(tmpmask)
+      if(j == l) then
+        gains(i) = -1.0
+      else ! sse for both sides
+        ! first get the mean for each side
+        lmean = sum(response, mask=tmpmask) / j
+        rmean = sum(response, mask=(.not. tmpmask)) / (l-j)
+        ! then get the sse
+        lmean = sum((response-lmean)**2, mask=tmpmask)
+        rmean = sum((response-rmean)**2, mask=(.not. tmpmask))
+        tmpscore = lmean + rmean
+        gains(i) = total_sse - tmpscore
+      end if
+
+    ! get result
+    mloc = maxloc(gains, dim=1)
+    o_v = v(mloc)
+    o_sse_score = gains(mloc)
+  end subroutine find_sse_split
 
 end module cart_methods

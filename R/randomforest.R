@@ -1,3 +1,8 @@
+## TODOs:
+## 1. handle discrete/categorical data
+## 2. handle regression
+## 3. optimize performance
+
 
 .safecheck_numeric <- function(v, argname, mustBePositive=FALSE){
   if(!is.numeric(v) || is.na(v) || is.null(v) || (mustBePositive && v < 0))
@@ -90,7 +95,7 @@ print.DecisionTree <- function(x, ...){
   show.DecisionTree(x)
 }
 
-initDTStructure <- function(l){
+initDTStructure <- function(l, predType){
   # structure(list(pointer=l[[1]],
   #           indices=rle(l[[2]]),
   #           thresholds=rle(l[[3]]),
@@ -99,7 +104,8 @@ initDTStructure <- function(l){
   structure(list(pointer=l[[1]],
             indices=l[[2]],
             thresholds=l[[3]],
-            ginis=l[[4]]),
+            ginis=l[[4]],
+            type=predType),
             class="DecisionTree")
 }
 
@@ -107,7 +113,10 @@ RandForest.fit <- function(x, y=NULL, verbose=TRUE, ntree=10,
                            mtry=floor(sqrt(ncol(x))),
                            weights=NULL, replace=TRUE,
                            sampsize=if(replace) nrow(x) else ceiling(0.632*nrow(x)),
-                           nodesize=1L, max_depth=NULL, ...){
+                           nodesize=1L, max_depth=NULL,
+                           method=c("classification", "regression"), ...){
+  method <- match.arg(method)
+  useClassification <- ifelse(method=="classification", TRUE, FALSE)
   if(is.null(max_depth))
     max_depth <- -1L
   max_depth <- .safecheck_numeric(max_depth, 'max_depth', FALSE)
@@ -115,24 +124,33 @@ RandForest.fit <- function(x, y=NULL, verbose=TRUE, ntree=10,
   mtry <- .safecheck_numeric(mtry, 'mtry')
   nodesize <- .safecheck_numeric(nodesize, 'nodesize')
   sampsize <- .safecheck_numeric(sampsize, 'sampsize')
-
-  classresponse <- as.integer(y)
-  classnames <- levels(y)
-  nclasses <- length(classnames)
-
   l <- vector('list', length(ntree))
   nr <- nrow(x)
+
+  if(useClassification){
+    classresponse <- as.integer(y)
+    classnames <- levels(y)
+    nclasses <- length(classnames)
+  } else {
+    response <- as.numeric(y)
+    if(length(unique(response)) <= 5 && nr > 5){
+      warning("'y' has 5 or less unique values; are you sure you want to do regression?")
+    }
+    nclasses <- 0L
+  }
+
   if(verbose){
     startt <- Sys.time()
     pb <- txtProgressBar(max=ntree, style=3)
   }
   for(i in seq_len(ntree)){
     subsamp <- sample(seq_len(nr), sampsize, replace=replace)
-    r <- .Call("R_learn_tree_classif",
+    r <- .Call("R_learn_tree",
                x[subsamp,], length(subsamp), ncol(x),
                classresponse[subsamp], nclasses, mtry,
-               max_depth, nodesize)
-    l[[i]] <- initDTStructure(r)
+               max_depth, nodesize,
+               useClassification)
+    l[[i]] <- initDTStructure(r, method)
     if(verbose) setTxtProgressBar(pb, i)
   }
   if(verbose){
@@ -140,7 +158,8 @@ RandForest.fit <- function(x, y=NULL, verbose=TRUE, ntree=10,
     print(round(difftime(Sys.time(), startt), digits=2L))
   }
 
-  attr(l, "class_levels") <- classnames
+  if(useClassification)
+    attr(l, "class_levels") <- classnames
   attr(l, "num_vars") <- ncol(x)
   class(l) <- 'RandForest'
   l

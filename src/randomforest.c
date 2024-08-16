@@ -18,10 +18,16 @@ DTN *initNode(){
 /*
  * R-exposed functions
  */
-SEXP R_learn_tree_classif(SEXP DATA, SEXP NROWS, SEXP NCOLS, SEXP CLASSES, SEXP NCLASSES, SEXP TO_CHECK, SEXP MAX_DEPTH, SEXP MIN_NODESIZE){
+SEXP R_learn_tree(SEXP DATA, SEXP NROWS, SEXP NCOLS, SEXP RESPONSE, SEXP NCLASSES,
+  SEXP TO_CHECK, SEXP MAX_DEPTH, SEXP MIN_NODESIZE, SEXP ISCLASSIFICATION){
+  int isclassif = LOGICAL(ISCLASSIFICATION)[0];
+
   // array input
   double *data = REAL(DATA);
-  int *class_response = INTEGER(CLASSES);
+  if(isclassif)
+    int *response = INTEGER(RESPONSE);
+  else
+    double *response = REAL(CLASSES);
 
   // variable inputs
   int nrows = INTEGER(NROWS)[0];
@@ -36,16 +42,23 @@ SEXP R_learn_tree_classif(SEXP DATA, SEXP NROWS, SEXP NCOLS, SEXP CLASSES, SEXP 
 
   // helper function will destroy data and class_response, so duplicate them first
   double *dup_data = malloc(sizeof(double)*nrows*ncols);
-  int *dup_class_response = malloc(sizeof(int)*nrows);
 
   // these do not need to be free'd -- will be free'd in the helper function
   //Rprintf("Duplicating memory.\n");
   dup_data = memcpy(dup_data, data, sizeof(double)*nrows*ncols);
-  dup_class_response = memcpy(dup_class_response, class_response, sizeof(int)*nrows);
+  if(isclassif){
+    int *dup_response = malloc(sizeof(int)*nrows);
+    dup_response = memcpy(dup_response, response, sizeof(int)*nrows);
+    learntreeclassif_helper(head, dup_data, dup_response, nrows, ncols, nclasses,
+                            num_to_check, 0, max_depth, min_nodesize);
+  } else {
+    learntreeregress_helper(head, dup_data, dup_response, nrows, ncols,
+                            num_to_check, 0, max_depth, min_nodesize);
+    double *dup_response = malloc(sizeof(double)*nrows);
+    dup_response = memcpy(dup_response, response, sizeof(double)*nrows);
+  }
 
   //Rprintf("Training Tree:\n");
-  learntreeclassif_helper(head, dup_data, dup_class_response, nrows, ncols, nclasses,
-                          num_to_check, 0, max_depth, min_nodesize);
   //Rprintf("Done training.\n");
   // now we should have our entire tree created, and our duplicated arrays destroyed.
 
@@ -397,8 +410,20 @@ void split_decision_node_classif(DTN *node, double *data, int *class_response,
     }
   }
   if(choice == -1){
+    // assign the most prominent class here
+    int *class_counts = calloc(nclass, sizeof(int));
+    int whichmax = 0, countmax = -1;
+    for(int i=0; i<nrows; i++){
+      tmp = class_response[i]-1;
+      class_counts[tmp1]++;
+      if(class_counts[tmp] > countmax){
+        countmax = class_counts[tmp];
+        whichmax = tmp+1;
+      }
+    }
+    free(class_counts);
     node->index = -1;
-    node->threshold = 1.0; //fix later
+    node->threshold = whichmax;
     node->gini_gain = 0.0;
   } else {
     node->threshold = results[choice];
@@ -413,8 +438,178 @@ void split_decision_node_classif(DTN *node, double *data, int *class_response,
   return;
 }
 
-void split_decision_node_regress(double *data, double *dbl_response, double *num_response, int nrows, int ncols){
-  // not implemented yet
+void learntreeregress_helper(DTN *node, double *data, double *response,
+                              int nrows, int ncols, int num_to_check,
+                              int cur_depth, int max_depth, int min_nodesize){
+  // this is a modification of learntreeclassif_helper
+  R_CheckUserInterrupt();
+  // IMPORTANT: *data is assumed to malloc'd elsewhere
+  // *data WILL BE FREE'd IN THIS FUNCTION
+  // the same is true of *response
+  // Calling function should duplicate any memory that cannot be destroyed
+
+  // First we'll check to see if all the entries are the same value
+  double curval = nrows==0 ? -1 : response[0];
+  int foundDifferent=0;
+  for(int i=0; i<nrows; i++){
+    if(curval != class_response[i]){
+      foundDifferent=1;
+      break;
+    }
+  }
+  if(!foundDifferent) cur_depth = max_depth;
+
+  // if already at max_depth or we have fewer observations than minimum node size,
+  // just assign the most prominent class and return
+  if(cur_depth == max_depth || nrows <= min_nodesize){
+    // these should be preinitialized but it doesn't hurt to be safe
+    node->index=-1;
+    node->threshold = 1; // default value is the first class
+    node->left = NULL;
+    node->right = NULL;
+    node->gini_gain = 0;
+
+    if(!foundDifferent){
+      // assign the average value
+      curval = 0;
+      for(int i=0; i<nrows; i++)
+        curval += response[i] / nrows;
+      node->threshold = curval;
+
+    } else {
+      // if we already know they're all the same, no need to check all again
+      node->threshold = curval;
+    }
+
+    free(response);
+    free(data);
+    return;
+  }
+
+  // otherwise we need to split into nodes
+  split_decision_node_regress(node, data, class_response,
+                              nrows, ncols, num_to_check);
+
+  double splitpoint = node->threshold;
+  int ind = node->index;
+  int nrow_left = 0, nrow_right=0;
+  double *v = &data[nrows*ind];
+  if(ind == -1){
+    node->left = NULL;
+    node->right = NULL;
+    free(data);
+    free(response);
+    return;
+  }
+
+  // How big do we need the new arrays to be?
+  for(int i=0; i<nrows; i++){
+    if(v[i] <= splitpoint)
+      nrow_left++;
+    else
+      nrow_right++;
+  }
+
+  double *left_data = malloc(sizeof(double) * nrow_left*ncols);
+  double *right_data = malloc(sizeof(double) * nrow_right*ncols);
+  int *left_response = malloc(sizeof(double) * nrow_left);
+  int *right_response = malloc(sizeof(double) * nrow_right);
+  int ctr_l=0, ctr_r=0;
+  for(int i=0; i<nrows*ncols; i++){
+    if(v[i%nrows] <= splitpoint){
+      left_data[ctr_l] = data[i];
+      if(ctr_l < nrow_left)
+        left_class[ctr_l] = response[i%nrows];
+      ctr_l++;
+    } else {
+      right_data[ctr_r] = data[i];
+      if(ctr_r < nrow_right)
+        right_class[ctr_r] = response[i%nrows];
+      ctr_r++;
+    }
+  }
+
+  // FREEING INPUT DATA/CLASS_RESPONSE
+  free(data);
+  free(class_response);
+
+  DTN *left_node = initNode();
+  DTN *right_node = initNode();
+
+  // left node
+  learntreeregress_helper(left_node, left_data, left_response, nrow_left,
+                          ncols, num_to_check, cur_depth+1,
+                          max_depth, min_nodesize);
+  // right node
+  learntreeregress_helper(right_node, right_data, right_response, nrow_right,
+                          ncols, num_to_check, cur_depth+1,
+                          max_depth, min_nodesize);
+
+  node->left = left_node;
+  node->right = right_node;
+
+  return;
+}
+
+void split_decision_node_regress(DTN *node, double *data, double *response,
+                                  int nrows, int ncols, int num_to_check){
+  // data should always be a numeric
+  // response should be a float
+  // nclass, num_to_check are constant throughout execution of the program
+
+  // data will be a matrix stored by column (first nrows entries are col1, second are col2, etc.)
+  // we'll just assume that all the preprocessing is done in R, no need to fiddle with that here
+  // processing the SEXPs will be done separately so we can repeatedly call this internally
+
+  // split should be determined by minimizing sum of square error
+
+  // setting up a random sample of ints
+  int *cols = malloc(sizeof(int) * ncols);
+  for(int i=0; i<ncols; i++) cols[i] = i;
+  int choice, tmp;
+
+  // shuffle the columns
+  GetRNGstate();
+  for(int i=ncols-1; i>0; i--){
+    choice = floor(unif_rand()*i);
+    tmp = cols[choice];
+    cols[choice] = cols[i];
+    cols[i] = tmp;
+  }
+  PutRNGstate();
+
+  // here 'sse' stores the decrease in sse from before to after the split
+  double *results = malloc(sizeof(double) * num_to_check);
+  double *sse = malloc(sizeof(double) * num_to_check);
+  double curmax = 0;
+  choice = -1;
+  for(int i=0; i<num_to_check; i++){
+    F77_CALL(find_sse_split)(&data[nrows*cols[i]], response, &nrows, &results[i], &sse[i]);
+    if(sse[i] >= curmax){
+      // maximizing the decrease in sse
+      // geq for same reasons as the classification case
+      choice = i;
+      curmax = sse[i];
+    }
+  }
+  if(choice == -1){
+    // assign mean value
+    curmax = 0;
+    for(int i=0; i<nrows; i++)
+      curmax += response[i] / nrows;
+    node->index = -1;
+    node->threshold = curmax;
+    node->gini_gain = 0.0;
+  } else {
+    node->threshold = results[choice];
+    node->index = cols[choice];
+    node->gini_gain = curmax;
+  }
+
+  free(results);
+  free(sse);
+  free(cols);
+
   return;
 }
 

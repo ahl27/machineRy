@@ -32,10 +32,12 @@ to_use <- seq(nrow(RuntimeResults)-USE_LAST_ROWS, nrow(RuntimeResults))
 
 if(interactive()){
   plot(NULL, xlim=c(10000,max(RuntimeResults[,1])), ylim=c(1, max(RuntimeResults[,-1],na.rm=T)),
-       log='yx', xlab='num vertices and edges', ylab='runtime (seconds)')
+      xlab='num vertices and edges', ylab='runtime (seconds)')
   for(i in seq_len(ncol(RuntimeResults)-1)){
-    lines(x=RuntimeResults[,1], y=RuntimeResults[,1+i],col=i)
-    l <- lm(log(RuntimeResults[to_use,1+i]) ~ log(RuntimeResults[to_use,1]))
+    points(x=RuntimeResults[,1], y=RuntimeResults[,1+i],col=i, pch=19, cex=0.5)
+    lines(x=RuntimeResults[,1], y=RuntimeResults[,1+i],col=i, type='l')
+    df <- data.frame(nvert = RuntimeResults[to_use,1], time=RuntimeResults[to_use,1+i])
+    l <- lm(log(time) ~ log(nvert), data=df)
     cat("Scaling of", colnames(RuntimeResults)[1+i], "is", coefficients(l)[2], '\n')
   }
 }
