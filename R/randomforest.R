@@ -5,7 +5,7 @@
 
 
 .safecheck_numeric <- function(v, argname, mustBePositive=FALSE){
-  if(!is.numeric(v) || is.na(v) || is.null(v) || (mustBePositive && v < 0))
+  if(!is.numeric(v) || anyNA(v) || any(is.null(v)) || (mustBePositive && v < 0))
     stop("invalid value for ", argname)
   if(length(v) > 1){
     warning("discarding values for ", argname, " after the first entry")
@@ -17,8 +17,9 @@
 # These are going to change eventually
 # for now, i'll just use placeholder functions
 RandForest <- function(formula, data, subset, verbose=TRUE,
-                   weights, na.action,
-                   method='rf.fit', contrasts=NULL, ...){
+                   weights, na.action, method='rf.fit',
+                   rf.mode=c('classification', 'regression'), contrasts=NULL, ...){
+  rf.mode <- match.arg(rf.mode)
   ## copying a lot of this from glm()
   if(missing(data))
     data <- environment(formula)
@@ -33,11 +34,14 @@ RandForest <- function(formula, data, subset, verbose=TRUE,
     return(mf)
   mt <- attr(mf, 'terms')
   y <- model.response(mf, "any")
-  if(length(dim(y)) == 1L){
+  if(length(dim(y)) == 1L && rf.mode=='classification'){
     nm <- rownames(y)
     dim(y) <- NULL
     if(!is.null(nm))
       names(y) <- nm
+  } else {
+    ## hacky
+    y <- unname(as.numeric(y))
   }
   if(!is.empty.model(mt))
     x <- model.matrix(mt, mf, contrasts)
@@ -51,9 +55,10 @@ RandForest <- function(formula, data, subset, verbose=TRUE,
   if(!is.numeric(x))
     stop("values supplied must be coercable to numeric")
 
-  r <- RandForest.fit(x, y, weights=weights, verbose, ...)
+  r <- RandForest.fit(x, y, method=rf.mode, weights=weights, verbose, ...)
   attr(r, 'formula') <- formula
   attr(r, 'contrasts') <- contrasts
+  attr(r, 'mode') <- rf.mode
   r
 }
 
@@ -114,9 +119,9 @@ RandForest.fit <- function(x, y=NULL, verbose=TRUE, ntree=10,
                            weights=NULL, replace=TRUE,
                            sampsize=if(replace) nrow(x) else ceiling(0.632*nrow(x)),
                            nodesize=1L, max_depth=NULL,
-                           method=c("classification", "regression"), ...){
-  method <- match.arg(method)
-  useClassification <- ifelse(method=="classification", TRUE, FALSE)
+                           method=NULL, ...){
+  ## method will always be filled in by the main call
+  useClassification <- method=="classification"
   if(is.null(max_depth))
     max_depth <- -1L
   max_depth <- .safecheck_numeric(max_depth, 'max_depth', FALSE)
@@ -128,7 +133,7 @@ RandForest.fit <- function(x, y=NULL, verbose=TRUE, ntree=10,
   nr <- nrow(x)
 
   if(useClassification){
-    classresponse <- as.integer(y)
+    response <- as.integer(y)
     classnames <- levels(y)
     nclasses <- length(classnames)
   } else {
@@ -147,7 +152,7 @@ RandForest.fit <- function(x, y=NULL, verbose=TRUE, ntree=10,
     subsamp <- sample(seq_len(nr), sampsize, replace=replace)
     r <- .Call("R_learn_tree",
                x[subsamp,], length(subsamp), ncol(x),
-               classresponse[subsamp], nclasses, mtry,
+               response[subsamp], nclasses, mtry,
                max_depth, nodesize,
                useClassification)
     l[[i]] <- initDTStructure(r, method)
@@ -167,6 +172,9 @@ RandForest.fit <- function(x, y=NULL, verbose=TRUE, ntree=10,
 
 predict.RandForest <- function(object, newdata=NULL, na.action=na.pass, ...){
   tt <- terms(attr(object, 'formula'), data=newdata)
+  predmode <- attr(object, "mode")
+  predmode <- match.arg(attr(object, 'mode'), c("classification", "regression"))
+  useClassification <- predmode == 'classification'
   noData <- (missing(newdata) || is.null(newdata))
   if(noData){
     x <- model.matrix(object)
@@ -181,16 +189,21 @@ predict.RandForest <- function(object, newdata=NULL, na.action=na.pass, ...){
 
   nentries <- nrow(x)
   nc <- ncol(x)
-  results <- matrix(0.0, nrow=nentries, ncol=length(attr(object, "class_levels")))
+  out_nc <- ifelse(useClassification, length(attr(object, "class_levels")), 1L)
+  results <- matrix(0.0, nrow=nentries, ncol=out_nc)
   colnames(results) <- attr(object, "class_levels")
   for(i in seq_along(object)){
     treeobj <- object[[i]]
     #for(i in seq(2,4))
     #  treeobj[[i]] <- inverse.rle(treeobj[[i]])
     p <- .Call("R_rfpredict", treeobj, t(x), nc, nentries)
-    p <- as.integer(p)
-    idxs <- cbind(seq_len(nentries), p)
-    results[idxs] <- results[idxs] + 1.0
+    if(useClassification){
+      p <- as.integer(p)
+      idxs <- cbind(seq_len(nentries), p)
+      results[idxs] <- results[idxs] + 1.0
+    } else {
+      results[,1] <- results[,1] + p
+    }
   }
 
   results <- results / length(object)

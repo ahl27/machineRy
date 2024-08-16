@@ -24,10 +24,6 @@ SEXP R_learn_tree(SEXP DATA, SEXP NROWS, SEXP NCOLS, SEXP RESPONSE, SEXP NCLASSE
 
   // array input
   double *data = REAL(DATA);
-  if(isclassif)
-    int *response = INTEGER(RESPONSE);
-  else
-    double *response = REAL(CLASSES);
 
   // variable inputs
   int nrows = INTEGER(NROWS)[0];
@@ -47,15 +43,17 @@ SEXP R_learn_tree(SEXP DATA, SEXP NROWS, SEXP NCOLS, SEXP RESPONSE, SEXP NCLASSE
   //Rprintf("Duplicating memory.\n");
   dup_data = memcpy(dup_data, data, sizeof(double)*nrows*ncols);
   if(isclassif){
+    int *response = INTEGER(RESPONSE);
     int *dup_response = malloc(sizeof(int)*nrows);
     dup_response = memcpy(dup_response, response, sizeof(int)*nrows);
     learntreeclassif_helper(head, dup_data, dup_response, nrows, ncols, nclasses,
                             num_to_check, 0, max_depth, min_nodesize);
   } else {
-    learntreeregress_helper(head, dup_data, dup_response, nrows, ncols,
-                            num_to_check, 0, max_depth, min_nodesize);
+    double *response = REAL(RESPONSE);
     double *dup_response = malloc(sizeof(double)*nrows);
     dup_response = memcpy(dup_response, response, sizeof(double)*nrows);
+    learntreeregress_helper(head, dup_data, dup_response, nrows, ncols,
+                            num_to_check, 0, max_depth, min_nodesize);
   }
 
   //Rprintf("Training Tree:\n");
@@ -415,7 +413,7 @@ void split_decision_node_classif(DTN *node, double *data, int *class_response,
     int whichmax = 0, countmax = -1;
     for(int i=0; i<nrows; i++){
       tmp = class_response[i]-1;
-      class_counts[tmp1]++;
+      class_counts[tmp]++;
       if(class_counts[tmp] > countmax){
         countmax = class_counts[tmp];
         whichmax = tmp+1;
@@ -452,7 +450,7 @@ void learntreeregress_helper(DTN *node, double *data, double *response,
   double curval = nrows==0 ? -1 : response[0];
   int foundDifferent=0;
   for(int i=0; i<nrows; i++){
-    if(curval != class_response[i]){
+    if(curval != response[i]){
       foundDifferent=1;
       break;
     }
@@ -487,7 +485,7 @@ void learntreeregress_helper(DTN *node, double *data, double *response,
   }
 
   // otherwise we need to split into nodes
-  split_decision_node_regress(node, data, class_response,
+  split_decision_node_regress(node, data, response,
                               nrows, ncols, num_to_check);
 
   double splitpoint = node->threshold;
@@ -512,26 +510,26 @@ void learntreeregress_helper(DTN *node, double *data, double *response,
 
   double *left_data = malloc(sizeof(double) * nrow_left*ncols);
   double *right_data = malloc(sizeof(double) * nrow_right*ncols);
-  int *left_response = malloc(sizeof(double) * nrow_left);
-  int *right_response = malloc(sizeof(double) * nrow_right);
+  double *left_response = malloc(sizeof(double) * nrow_left);
+  double *right_response = malloc(sizeof(double) * nrow_right);
   int ctr_l=0, ctr_r=0;
   for(int i=0; i<nrows*ncols; i++){
     if(v[i%nrows] <= splitpoint){
       left_data[ctr_l] = data[i];
       if(ctr_l < nrow_left)
-        left_class[ctr_l] = response[i%nrows];
+        left_response[ctr_l] = response[i%nrows];
       ctr_l++;
     } else {
       right_data[ctr_r] = data[i];
       if(ctr_r < nrow_right)
-        right_class[ctr_r] = response[i%nrows];
+        right_response[ctr_r] = response[i%nrows];
       ctr_r++;
     }
   }
 
   // FREEING INPUT DATA/CLASS_RESPONSE
   free(data);
-  free(class_response);
+  free(response);
 
   DTN *left_node = initNode();
   DTN *right_node = initNode();

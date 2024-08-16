@@ -254,6 +254,7 @@ contains
         tmpscore = lmean + rmean
         gains(i) = total_sse - tmpscore
       end if
+    end do
 
     ! get result
     mloc = maxloc(gains, dim=1)

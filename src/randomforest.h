@@ -40,10 +40,10 @@ void learntreeclassif_helper(DTN *node, double *data, int *class_response,
 void split_decision_node_classif(DTN *node, double *data, int *class_response,
                                   int nrows, int ncols, int nclass, int num_to_check);
 
-void learntreeregress_helper(DTN *node, double *data, int *response,
-                              int nrows, int ncols, int nclass, int num_to_check,
+void learntreeregress_helper(DTN *node, double *data, double *response,
+                              int nrows, int ncols, int num_to_check,
                               int cur_depth, int max_depth, int min_nodesize);
-void split_decision_node_regress(DTN *node, double *data, int *response,
+void split_decision_node_regress(DTN *node, double *data, double *response,
                                   int nrows, int ncols, int num_to_check);
 
 void export_internal_tree(DTN *tree, int **indices, double **thresholds, double **gini_gain, int *outlength);
