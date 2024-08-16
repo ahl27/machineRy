@@ -18,7 +18,7 @@
 # for now, i'll just use placeholder functions
 RandForest <- function(formula, data, subset, verbose=TRUE,
                    weights, na.action, method='rf.fit',
-                   rf.mode=c('classification', 'regression'), contrasts=NULL, ...){
+                   rf.mode=c('auto', 'classification', 'regression'), contrasts=NULL, ...){
   rf.mode <- match.arg(rf.mode)
   ## copying a lot of this from glm()
   if(missing(data))
@@ -34,13 +34,39 @@ RandForest <- function(formula, data, subset, verbose=TRUE,
     return(mf)
   mt <- attr(mf, 'terms')
   y <- model.response(mf, "any")
-  if(length(dim(y)) == 1L && rf.mode=='classification'){
+  if(rf.mode == 'auto'){
+    if(is.factor(y)){
+      rf.mode <- "classification"
+    } else if (is.numeric(y)){
+      rf.mode <- "regression"
+    } else {
+      stop("response variable must be of type 'numeric' or 'factor'")
+    }
+  }
+
+  isClassif <- rf.mode == 'classification'
+  if(isClassif && !is.factor(y)){
+    stop("response must be of type 'factor' for rf.mode='classification'")
+  }
+  if(!isClassif && !is.numeric(y)){
+    stop("response must be of type 'numeric' for rf.mode='regression'")
+  }
+
+  ## TODO: check if this is robust -- what if we have multiple predictors?
+  ## the response guaranteed to be the first outcome?
+  all_data_types <- table(attr(mt, 'dataClasses'))
+  if(rf.mode == "classification")
+    all_data_types['factor'] <- all_data_types['factor'] - 1L
+  all_data_types <- all_data_types[all_data_types!=0]
+
+  if(length(dim(y)) == 1L){
+    # I don't know what this is intended to catch
     nm <- rownames(y)
     dim(y) <- NULL
     if(!is.null(nm))
       names(y) <- nm
-  } else {
-    ## hacky
+  }
+  if(!isClassif){
     y <- unname(as.numeric(y))
   }
   if(!is.empty.model(mt))
@@ -139,9 +165,12 @@ RandForest.fit <- function(x, y=NULL, verbose=TRUE, ntree=10,
   } else {
     response <- as.numeric(y)
     if(length(unique(response)) <= 5 && nr > 5){
-      warning("'y' has 5 or less unique values; are you sure you want to do regression?")
+      warning("response variable has 5 or less unique values; are you sure you want to do regression?")
     }
     nclasses <- 0L
+  }
+  if(all(y==y[1])){
+    stop("response variable has only one unique value!")
   }
 
   if(verbose){
@@ -191,7 +220,8 @@ predict.RandForest <- function(object, newdata=NULL, na.action=na.pass, ...){
   nc <- ncol(x)
   out_nc <- ifelse(useClassification, length(attr(object, "class_levels")), 1L)
   results <- matrix(0.0, nrow=nentries, ncol=out_nc)
-  colnames(results) <- attr(object, "class_levels")
+  if(useClassification)
+    colnames(results) <- attr(object, "class_levels")
   for(i in seq_along(object)){
     treeobj <- object[[i]]
     #for(i in seq(2,4))
