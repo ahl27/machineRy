@@ -81,6 +81,7 @@ RandForest <- function(formula, data, subset, verbose=TRUE,
   if(!is.numeric(x))
     stop("values supplied must be coercable to numeric")
 
+  ## TODO: track names of variables -- `y~.` doesn't store names in `.`
   r <- RandForest.fit(x, y, method=rf.mode, weights=weights, verbose, ...)
   attr(r, 'formula') <- formula
   attr(r, 'contrasts') <- contrasts
@@ -126,7 +127,7 @@ print.DecisionTree <- function(x, ...){
   show.DecisionTree(x)
 }
 
-initDTStructure <- function(l, predType){
+initDTStructure <- function(l, predType, classnames){
   # structure(list(pointer=l[[1]],
   #           indices=rle(l[[2]]),
   #           thresholds=rle(l[[3]]),
@@ -136,7 +137,8 @@ initDTStructure <- function(l, predType){
             indices=l[[2]],
             thresholds=l[[3]],
             ginis=l[[4]],
-            type=predType),
+            type=predType,
+            class_levels=classnames),
             class="DecisionTree")
 }
 
@@ -164,6 +166,7 @@ RandForest.fit <- function(x, y=NULL, verbose=TRUE, ntree=10,
     nclasses <- length(classnames)
   } else {
     response <- as.numeric(y)
+    classnames <- NULL
     if(length(unique(response)) <= 5 && nr > 5){
       warning("response variable has 5 or less unique values; are you sure you want to do regression?")
     }
@@ -184,7 +187,7 @@ RandForest.fit <- function(x, y=NULL, verbose=TRUE, ntree=10,
                response[subsamp], nclasses, mtry,
                max_depth, nodesize,
                useClassification)
-    l[[i]] <- initDTStructure(r, method)
+    l[[i]] <- initDTStructure(r, method, classnames)
     if(verbose) setTxtProgressBar(pb, i)
   }
   if(verbose){
@@ -238,4 +241,128 @@ predict.RandForest <- function(object, newdata=NULL, na.action=na.pass, ...){
 
   results <- results / length(object)
   results
+}
+
+as.dendrogram.DecisionTree <- function(object){
+  inds <- object$indices
+  ths <- object$thresholds
+  gains <- object$ginis
+  isClassif <- object$type == "classification"
+  levs <- attr(d, "class_levels")
+
+  ## set up the root node
+  if(length(inds) == 1L){
+    d <- 1L
+    attr(d, "leaf") <- TRUE
+    attr(d, "label") <- ifelse(isClassif, levs[as.integer(ths[1])], sprintf("%0.2f", ths[1]))
+  } else {
+    d <- vector('list', length=2L)
+  }
+  attr(d, "ind") <- inds[1]
+  attr(d, "thresh") <- ths[1]
+  attr(d, "gain") <- gains[1]
+
+  ## dend attributes to fix later
+  attr(d, "members") <- 0L
+  attr(d, "height") <- 0
+  attr(d, "midpoint") <- 0
+  class(d) <- "dendrogram"
+
+  ## set up a queue
+  cur_q <- list(1,2)
+  ctr <- 2L
+  leafctr <- 1L
+  while(ctr <= length(inds)){
+    acc <- cur_q[[1L]]
+    i <- inds[ctr]
+    th <- ths[ctr]
+    g <- gains[ctr]
+    cur_q <- cur_q[-1L]
+    if(i != -1){
+      ## append the next two entries to list
+      node <- vector("list", 2L)
+      cur_q <- c(cur_q, list(c(acc, 1L), c(acc,2)))
+      #attr(node, "midpoint") <- 0
+    } else {
+      node <- leafctr
+      leafctr <- leafctr + 1L
+      attr(node, 'leaf') <- TRUE
+      attr(node, "label") <- ifelse(isClassif, levs[as.integer(ths[ctr])], sprintf("%0.2f", ths[ctr]))
+    }
+    attr(node, "ind") <- inds[ctr]
+    attr(node, "thresh") <- ths[ctr]
+    attr(node, "gain") <- gains[ctr]
+    attr(node, "members") <- 0L
+    attr(node, "height") <- 0
+    class(node) <- "dendrogram"
+
+    d[[acc]] <- node
+    ctr <- ctr + 1L
+  }
+
+  ## now we have to fix all the internal values
+  all_v <- unlist(d)
+  d <- dendrapply(d, \(y){
+    if(!is.leaf(y)){
+      ## getting the midpoint is always the hardest
+      p1 <- ifelse(is.leaf(y[[1]]), -1L, attr(y[[1]], 'midpoint'))
+      p2 <- ifelse(is.leaf(y[[2]]), -1L, attr(y[[2]], 'midpoint'))
+      if(p1 < 0 && p2 < 0){
+        mp <- 0.5
+      } else if(p1 > 0 && p2 > 0){
+        mp <- (length(unlist(y[[1]])) + p1 + p2) / 2
+      } else if(p2 < 0){
+        mp <- sum(abs(c(p1,p2))) / 2 + p1
+      } else {
+        mp <- sum(abs(c(p1,p2))) / 2
+      }
+      attr(y, 'members') <- length(unlist(y))
+      attr(y, 'height') <- max(attr(y[[1]], 'height'), attr(y[[2]], 'height')) + 1L
+      attr(y, 'midpoint') <- mp
+    } else {
+      tmp <- as.integer(y)
+      y[] <- match(tmp, all_v)
+      attr(y, 'members') <- 1L
+    }
+    y
+  }, how='post.order')
+  return(d)
+}
+
+plot.DecisionTree <- function(x, y, text.adj=c(0,-0.05), text.cex=0.5, plotGain=FALSE, ...){
+  ## TODO: figure out how to parse extended `text.` args into `text`
+  x <- as.dendrogram(x)
+  ## extract values from the tree
+  ## builds a data.frame using postorder traversal
+  r <- dendrapply(x, \(x){
+    if(is.leaf(x)){
+      data.frame(x=numeric(0L), y=numeric(0L), label=character(0L))
+    } else {
+      yv <- attr(x, "edgeplotpar")
+      cur_v <- data.frame(x=attr(x, "xpos"), y=yv$h, label=yv$lab)
+      rbind(x[[1]], x[[2]], cur_v)
+    }
+  }, how='post.order')
+
+  ## plot dendrogram
+  plot(x, ..., axes=FALSE)
+  x <- dendrapply(x, \(dend){
+    if(!is.leaf(dend)){
+      xr <- unlist(dend)
+      xr <- c(min(xr), max(xr))
+      xv <- attr(dend, 'midpoint') + xr[1]
+      yv <- attr(dend, 'height')
+      vname <- paste0("V", attr(dend, 'ind'))
+      thresh <- sprintf("%0.2f", attr(dend, 'thresh'))
+      if(plotGain){
+        gain <- sprintf("%+0.1f", attr(dend, 'gain'))
+        text(xv+text.adj[1], yv+text.adj[2], bquote(.(vname) <= .(thresh) ~~ ( .(gain) )), cex=text.cex)
+      } else {
+        text(xv+text.adj[1], yv+text.adj[2], bquote(.(vname) <= .(thresh)), cex=text.cex)
+      }
+    }
+    dend
+  }, how='post.order')
+
+  invisible(NULL)
 }

@@ -7,7 +7,7 @@ Authors@R:
 Description: Implements several machine learning models for R, including 
             random forests and feedforward multilayer perceptrons.
 Depends: R (>= 4.3.0)
-Imports: methods, stats, utils, igraph
+Imports: methods, stats, utils, igraph, SynExtend
 Suggests: randomForest
 License: GPL-3
 Encoding: UTF-8
