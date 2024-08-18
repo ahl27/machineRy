@@ -1,9 +1,3 @@
-## TODOs:
-## 1. handle discrete/categorical data
-## 2. handle regression
-## 3. optimize performance
-
-
 .safecheck_numeric <- function(v, argname, mustBePositive=FALSE){
   if(!is.numeric(v) || anyNA(v) || any(is.null(v)) || (mustBePositive && v < 0))
     stop("invalid value for ", argname)
