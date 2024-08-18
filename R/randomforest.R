@@ -301,23 +301,23 @@ as.dendrogram.DecisionTree <- function(object){
   }
 
   ## now we have to fix all the internal values
+  .midpoint <- \(node) attr(node, 'midpoint')
+  .height <- \(node) attr(node, 'height')
   all_v <- unlist(d)
   d <- dendrapply(d, \(y){
     if(!is.leaf(y)){
-      ## getting the midpoint is always the hardest
-      p1 <- ifelse(is.leaf(y[[1]]), -1L, attr(y[[1]], 'midpoint'))
-      p2 <- ifelse(is.leaf(y[[2]]), -1L, attr(y[[2]], 'midpoint'))
-      if(p1 < 0 && p2 < 0){
+      is_leaf <- c(is.leaf(y[[1]]), is.leaf(y[[2]]))
+      if(all(is_leaf)){
         mp <- 0.5
-      } else if(p1 > 0 && p2 > 0){
-        mp <- (length(unlist(y[[1]])) + p1 + p2) / 2
-      } else if(p2 < 0){
-        mp <- sum(abs(c(p1,p2))) / 2 + p1
+      } else if(is_leaf[1]){
+        mp <- ((.midpoint(y[[2]]) + 1) / 2)
+      } else if(is_leaf[2]){
+        mp <- ((.midpoint(y[[1]]) + 1) / 2) + .midpoint(y[[1]])
       } else {
-        mp <- sum(abs(c(p1,p2))) / 2
+        mp <- (attr(y[[1]], 'members') + .midpoint(y[[1]]) + .midpoint(y[[2]])) / 2
       }
       attr(y, 'members') <- length(unlist(y))
-      attr(y, 'height') <- max(attr(y[[1]], 'height'), attr(y[[2]], 'height')) + 1L
+      attr(y, 'height') <- max(.height(y[[1]]), .height(y[[2]])) + 1L
       attr(y, 'midpoint') <- mp
     } else {
       tmp <- as.integer(y)
