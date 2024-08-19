@@ -10,7 +10,7 @@
 
 # These are going to change eventually
 # for now, i'll just use placeholder functions
-RandForest <- function(formula, data, subset, verbose=TRUE,
+RandForest <- function(formula, data, subset, verbose=interactive(),
                    weights, na.action, method='rf.fit',
                    rf.mode=c('auto', 'classification', 'regression'), contrasts=NULL, ...){
   rf.mode <- match.arg(rf.mode)
@@ -76,10 +76,14 @@ RandForest <- function(formula, data, subset, verbose=TRUE,
     stop("values supplied must be coercable to numeric")
 
   ## TODO: track names of variables -- `y~.` doesn't store names in `.`
-  r <- RandForest.fit(x, y, method=rf.mode, weights=weights, verbose, ...)
+  r <- RandForest.fit(x, y, method=rf.mode, weights=weights, verbose, terms=mt,...)
   attr(r, 'formula') <- formula
   attr(r, 'contrasts') <- contrasts
   attr(r, 'mode') <- rf.mode
+  attr(r, "terms") <- mt
+  attr(r, "na.action") <- attr(mf, 'na.action')
+  attr(r, "offset") <- offset
+  attr(r, 'xlevels') <- .getXlevels(mt, mf)
   r
 }
 
@@ -94,7 +98,7 @@ show.DecisionTree <- function(object){
 
 show.RandForest <- function(object){
   l <- length(object)
-  cat("A RandForest predictor containing", l, "trees:\n")
+  cat("A RandForest model containing", l, "trees:\n")
   if(l < 5){
     to_show <- seq_along(object)
   } else {
@@ -121,7 +125,7 @@ print.DecisionTree <- function(x, ...){
   show.DecisionTree(x)
 }
 
-initDTStructure <- function(l, predType, classnames){
+initDTStructure <- function(l, predType, classnames, terms){
   # structure(list(pointer=l[[1]],
   #           indices=rle(l[[2]]),
   #           thresholds=rle(l[[3]]),
@@ -132,17 +136,20 @@ initDTStructure <- function(l, predType, classnames){
             thresholds=l[[3]],
             ginis=l[[4]],
             type=predType,
-            class_levels=classnames),
+            class_levels=classnames,
+            var_names=attr(terms, 'term.labels')),
             class="DecisionTree")
 }
 
-RandForest.fit <- function(x, y=NULL, verbose=TRUE, ntree=10,
+RandForest.fit <- function(x, y=NULL, verbose=interactive(), ntree=10,
                            mtry=floor(sqrt(ncol(x))),
                            weights=NULL, replace=TRUE,
                            sampsize=if(replace) nrow(x) else ceiling(0.632*nrow(x)),
                            nodesize=1L, max_depth=NULL,
-                           method=NULL, ...){
+                           method=NULL, terms=NULL,...){
   ## method will always be filled in by the main call
+  if(is.null(terms)) stop("RandForest.fit is not intended to be called directly!")
+  if(is.null(method)) stop("RandForest.fit is not intended to be called directly!")
   useClassification <- method=="classification"
   if(is.null(max_depth))
     max_depth <- -1L
@@ -181,7 +188,7 @@ RandForest.fit <- function(x, y=NULL, verbose=TRUE, ntree=10,
                response[subsamp], nclasses, mtry,
                max_depth, nodesize,
                useClassification)
-    l[[i]] <- initDTStructure(r, method, classnames)
+    l[[i]] <- initDTStructure(r, method, classnames, terms)
     if(verbose) setTxtProgressBar(pb, i)
   }
   if(verbose){
@@ -197,21 +204,20 @@ RandForest.fit <- function(x, y=NULL, verbose=TRUE, ntree=10,
 }
 
 predict.RandForest <- function(object, newdata=NULL, na.action=na.pass, ...){
-  tt <- terms(attr(object, 'formula'), data=newdata)
+  ## tt <- terms(attr(object, 'formula'), data=newdata)
+  tt <- terms(object)
   predmode <- attr(object, "mode")
   predmode <- match.arg(attr(object, 'mode'), c("classification", "regression"))
   useClassification <- predmode == 'classification'
   noData <- (missing(newdata) || is.null(newdata))
   if(noData){
-    x <- model.matrix(object)
-    mmDone <- TRUE
-    return()
-  } else {
-    Terms <- delete.response(tt)
-    m <- model.frame(Terms, newdata, na.action = na.action)
-    x <- model.matrix(Terms, m, contrasts.arg=attr(object, 'contrasts'))
-    mmDone <- FALSE
+    stop("No data provided to predict on!")
   }
+
+  Terms <- delete.response(tt)
+  m <- model.frame(Terms, newdata, na.action = na.action, xlev=attr(object, 'xlevels'))
+  x <- model.matrix(Terms, m, contrasts.arg=attr(object, 'contrasts'))
+  if(!is.null(cl <- attr(Terms, "dataClasses"))) .checkMFClasses(cl, m)
 
   nentries <- nrow(x)
   nc <- ncol(x)
@@ -241,8 +247,17 @@ as.dendrogram.DecisionTree <- function(object){
   inds <- object$indices
   ths <- object$thresholds
   gains <- object$ginis
+  term_names <- object$var_names
   isClassif <- object$type == "classification"
-  levs <- attr(d, "class_levels")
+  levs <- object$class_levels
+
+  ind_labs <- rep('', length(inds))
+  if(is.null(term_names)){
+    warning("input dendrogram is missing labels for input variables.")
+    ind_labs <- paste0("V", inds)
+  } else {
+    ind_labs[inds > 0] <- term_names[inds[inds>0]]
+  }
 
   ## set up the root node
   if(length(inds) == 1L){
@@ -252,7 +267,7 @@ as.dendrogram.DecisionTree <- function(object){
   } else {
     d <- vector('list', length=2L)
   }
-  attr(d, "ind") <- inds[1]
+  attr(d, "variable") <- ind_labs[1]
   attr(d, "thresh") <- ths[1]
   attr(d, "gain") <- gains[1]
 
@@ -283,7 +298,7 @@ as.dendrogram.DecisionTree <- function(object){
       attr(node, 'leaf') <- TRUE
       attr(node, "label") <- ifelse(isClassif, levs[as.integer(ths[ctr])], sprintf("%0.2f", ths[ctr]))
     }
-    attr(node, "ind") <- inds[ctr]
+    attr(node, "variable") <- ind_labs[ctr]
     attr(node, "thresh") <- ths[ctr]
     attr(node, "gain") <- gains[ctr]
     attr(node, "members") <- 0L
@@ -323,37 +338,48 @@ as.dendrogram.DecisionTree <- function(object){
   return(d)
 }
 
-plot.DecisionTree <- function(x, y, text.adj=c(0,-0.05), text.cex=0.5, plotGain=FALSE, ...){
-  ## TODO: figure out how to parse extended `text.` args into `text`
+plot.DecisionTree <- function(x, plotGain=FALSE, ...){
   x <- as.dendrogram(x)
-  ## extract values from the tree
-  ## builds a data.frame using postorder traversal
-  r <- dendrapply(x, \(x){
-    if(is.leaf(x)){
-      data.frame(x=numeric(0L), y=numeric(0L), label=character(0L))
-    } else {
-      yv <- attr(x, "edgeplotpar")
-      cur_v <- data.frame(x=attr(x, "xpos"), y=yv$h, label=yv$lab)
-      rbind(x[[1]], x[[2]], cur_v)
-    }
-  }, how='post.order')
 
+  all_args <- match.call(expand.dots=FALSE)$`...`
+  if(is.null(all_args))
+    all_args <- list()
+
+  ## set default args
+  default_args <- list(axes=FALSE,
+                        text.cex=0.5*par('cex'),
+                        text.adj=c(0.5,1))
+  for(a in names(default_args)){
+    if(!a %in% names(all_args))
+      all_args[[a]] <- default_args[[a]]
+  }
+
+  args_plot <- all_args[!grepl("^text\\.", names(all_args))]
+  args_text <- all_args[grepl("^text\\.", names(all_args))]
+  names(args_text) <- gsub("^text\\.(.*)", '\\1', names(args_text))
+
+  args_plot$x <- x
   ## plot dendrogram
-  plot(x, ..., axes=FALSE)
+  #plot(x, ..., axes=FALSE)
+  do.call(plot, args=args_plot)
   x <- dendrapply(x, \(dend){
     if(!is.leaf(dend)){
       xr <- unlist(dend)
       xr <- c(min(xr), max(xr))
       xv <- attr(dend, 'midpoint') + xr[1]
       yv <- attr(dend, 'height')
-      vname <- paste0("V", attr(dend, 'ind'))
+      vname <- attr(dend, 'variable')
       thresh <- sprintf("%0.2f", attr(dend, 'thresh'))
+      aa <- args_text
+      aa$x <- xv
+      aa$y <- yv
       if(plotGain){
         gain <- sprintf("%+0.1f", attr(dend, 'gain'))
-        text(xv+text.adj[1], yv+text.adj[2], bquote(.(vname) <= .(thresh) ~~ ( .(gain) )), cex=text.cex)
+        aa$labels <- as.expression(bquote(.(vname) <= .(thresh) ~~ ( .(gain) )))
       } else {
-        text(xv+text.adj[1], yv+text.adj[2], bquote(.(vname) <= .(thresh)), cex=text.cex)
+        aa$labels <- as.expression(bquote(.(vname) <= .(thresh)))
       }
+      do.call(text, args=aa)
     }
     dend
   }, how='post.order')

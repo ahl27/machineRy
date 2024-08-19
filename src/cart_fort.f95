@@ -237,7 +237,10 @@ contains
     ! original sse is just the mean squared error
     total_sse = sum(((response - sum(response)/l))**2)
 
-    ! naive implementation first, simulated annealing later
+    ! eventually I should do something smarter here
+    ! is it even that slow though to just check everything?
+
+    ! small number, just check all splits
     gains(:) = total_sse
     do i=1, l
       tmpmask(:) = v <= v(i)
@@ -255,6 +258,8 @@ contains
         gains(i) = total_sse - tmpscore
       end if
     end do
+
+
 
     ! get result
     mloc = maxloc(gains, dim=1)
